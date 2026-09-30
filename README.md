@@ -25,53 +25,15 @@ The RPC settings also accept `RPC_URL`, `RPC_USER`, and `RPC_PASSWORD` as fallba
 
 ## Database schema
 
-Create the following tables in the database configured by `DATABASE_URL` before starting the indexer:
+Apply the SQL files in `src/migrations/` to the database configured by `DATABASE_URL`, in numeric order, before starting the indexer. For example, from the project root:
 
-```sql
-CREATE TABLE blocks (
-    id BIGSERIAL PRIMARY KEY,
-    height BIGINT NOT NULL UNIQUE,
-    hash TEXT NOT NULL,
-    previous_hash TEXT NOT NULL,
-    timestamp BIGINT NOT NULL,
-    tx_count INTEGER NOT NULL
-);
-
-CREATE TABLE transactions (
-    id BIGSERIAL PRIMARY KEY,
-    txid TEXT NOT NULL UNIQUE,
-    block_id BIGINT NOT NULL REFERENCES blocks(id),
-    position INTEGER NOT NULL,
-    version INTEGER NOT NULL,
-    lock_time BIGINT NOT NULL,
-    is_coinbase BOOLEAN NOT NULL
-);
-
-CREATE TABLE inputs (
-    id BIGSERIAL PRIMARY KEY,
-    transaction_id BIGINT NOT NULL REFERENCES transactions(id),
-    vin INTEGER NOT NULL,
-    prev_txid TEXT,
-    prev_vout BIGINT,
-    script_sig TEXT NOT NULL,
-    sequence BIGINT NOT NULL,
-    UNIQUE (transaction_id, vin)
-);
-
-CREATE TABLE outputs (
-    id BIGSERIAL PRIMARY KEY,
-    transaction_id BIGINT NOT NULL REFERENCES transactions(id),
-    vout INTEGER NOT NULL,
-    value BIGINT NOT NULL,
-    script_pubkey TEXT NOT NULL,
-    spent BOOLEAN NOT NULL DEFAULT FALSE,
-    spent_by_txid TEXT,
-    spent_by_vin INTEGER,
-    UNIQUE (transaction_id, vout)
-);
+```sh
+for migration in src/migrations/*.sql; do
+  psql "$DATABASE_URL" -f "$migration"
+done
 ```
 
-The spent-state columns on `outputs` are updated when a later indexed transaction spends an output.
+These scripts create the tables and indexes needed by the application. They are not applied automatically at startup. The spent-state columns on `outputs` are updated when a later indexed transaction spends an output.
 
 ## Run
 
@@ -93,4 +55,4 @@ The process connects to PostgreSQL first, then queries the node for its current 
 
 - Only the current tip block is processed on each invocation; missed blocks are not automatically backfilled.
 - Inputs are stored with their previous transaction references. Output spend status is updated only when the referenced output has already been indexed.
-- Schema migrations are not currently managed by the application; provision the tables before running it.
+- Database migrations are provided as SQL files but are not applied automatically; run them before starting the application.
