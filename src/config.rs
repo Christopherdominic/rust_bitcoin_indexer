@@ -1,38 +1,25 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use dotenvy::dotenv;
 use std::env;
 
-#[derive(Clone, Debug)]
 pub struct Config {
-    pub database_url: String,
     pub rpc_url: String,
     pub rpc_user: String,
     pub rpc_password: String,
+    pub database_url: String,
+    pub zmq_block_url: String,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        dotenvy::dotenv().ok();
-
-        let database_url = env::var("DATABASE_URL")
-            .context("DATABASE_URL is not set; check the project .env file")?;
-
-        let rpc_url = env::var("BITCOIN_RPC_URL")
-            .or_else(|_| env::var("RPC_URL"))
-            .context("BITCOIN_RPC_URL or RPC_URL is not set")?;
-
-        let rpc_user = env::var("BITCOIN_RPC_USER")
-            .or_else(|_| env::var("RPC_USER"))
-            .context("BITCOIN_RPC_USER or RPC_USER is not set")?;
-
-        let rpc_password = env::var("BITCOIN_RPC_PASSWORD")
-            .or_else(|_| env::var("RPC_PASSWORD"))
-            .context("BITCOIN_RPC_PASSWORD or RPC_PASSWORD is not set")?;
+        dotenv().ok();
 
         Ok(Self {
-            database_url,
-            rpc_url,
-            rpc_user,
-            rpc_password,
+            rpc_url: env::var("BITCOIN_RPC_URL")?,
+            rpc_user: env::var("BITCOIN_RPC_USER")?,
+            rpc_password: env::var("BITCOIN_RPC_PASSWORD")?,
+            database_url: env::var("DATABASE_URL")?,
+            zmq_block_url: env::var("ZMQ_BLOCK_URL")?,
         })
     }
 }

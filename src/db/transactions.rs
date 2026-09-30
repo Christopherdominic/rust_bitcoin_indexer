@@ -1,12 +1,12 @@
 use anyhow::Result;
-use bitcoin::Transaction;
-use sqlx::PgPool;
+use bitcoin::Transaction as BitcoinTransaction;
+use sqlx::{Postgres, Transaction};
 
 pub async fn save_transaction(
-    pool: &PgPool,
+    db: &mut Transaction<'_, Postgres>,
     block_id: i64,
     position: usize,
-    tx: &Transaction,
+    tx: &BitcoinTransaction,
 ) -> Result<i64> {
     let txid = tx.compute_txid().to_string();
 
@@ -39,7 +39,7 @@ pub async fn save_transaction(
     .bind(tx.version.0)
     .bind(tx.lock_time.to_consensus_u32() as i64)
     .bind(tx.is_coinbase())
-    .fetch_one(pool)
+    .fetch_one(&mut **db)
     .await?;
 
     Ok(transaction_id)

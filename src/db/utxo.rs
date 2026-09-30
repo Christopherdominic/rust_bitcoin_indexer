@@ -1,9 +1,13 @@
 use anyhow::Result;
-use bitcoin::Transaction;
-use sqlx::PgPool;
+use bitcoin::Transaction as BitcoinTransaction;
+use sqlx::{Postgres, Transaction};
 
-pub async fn mark_spent(pool: &PgPool, spending_tx: &Transaction) -> Result<()> {
-    // Coinbase transactions do not spend previous outputs.
+use crate::ui;
+
+pub async fn mark_spent(
+    db: &mut Transaction<'_, Postgres>,
+    spending_tx: &BitcoinTransaction,
+) -> Result<()> {
     if spending_tx.is_coinbase() {
         return Ok(());
     }
@@ -14,7 +18,7 @@ pub async fn mark_spent(pool: &PgPool, spending_tx: &Transaction) -> Result<()> 
         let prev_txid = input.previous_output.txid.to_string();
         let prev_vout = input.previous_output.vout as i32;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE outputs
             SET
@@ -33,8 +37,15 @@ pub async fn mark_spent(pool: &PgPool, spending_tx: &Transaction) -> Result<()> 
         .bind(vin as i32)
         .bind(&prev_txid)
         .bind(prev_vout)
-        .execute(pool)
+        .execute(&mut **db)
         .await?;
+
+        if result.rows_affected() == 0 {
+            ui::warn(format!(
+                "Previous output not indexed: {}:{}",
+                prev_txid, prev_vout
+            ));
+        }
     }
 
     Ok(())

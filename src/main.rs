@@ -2,64 +2,40 @@ mod config;
 mod db;
 mod indexer;
 mod rpc;
+mod ui;
+mod zmq;
 
 use anyhow::Result;
 
 use config::Config;
 use db::postgres::connect;
-use db::{
-    blocks::save_block, inputs::save_inputs, outputs::save_outputs, transactions::save_transaction,
-    utxo::mark_spent,
-};
-use indexer::block::BlockProcessor;
-use indexer::transaction::TransactionProcessor;
+use indexer::sync::sync_chain;
 use rpc::bitcoin::BitcoinRpc;
+use zmq::listener::run_zmq_listener;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = Config::from_env()?;
 
+    ui::banner();
+    ui::section("Connecting");
+
     let pool = connect(&config.database_url).await?;
 
-    println!("Database connection successful!");
+    ui::success("PostgreSQL connected");
 
     let rpc = BitcoinRpc::new(&config)?;
 
-    println!("=== Bitcoin Indexer ===");
+    ui::success("Bitcoin Core RPC ready");
+    ui::field("rpc", &config.rpc_url);
 
-    let height = rpc.get_block_count()?;
+    // Catch up blocks missed while the indexer was offline.
+    sync_chain(&rpc, &pool).await?;
 
-    println!("Current height: {}", height);
+    ui::success("Historical synchronization complete");
 
-    let hash = rpc.get_block_hash(height)?;
-
-    let block = BlockProcessor::fetch(&rpc, height)?;
-
-    let block_id = save_block(&pool, height, &hash, &block).await?;
-
-    println!("Block saved to database with ID: {}", block_id);
-
-    for (position, tx) in block.txdata.iter().enumerate() {
-        let transaction_id = save_transaction(&pool, block_id, position, tx).await?;
-
-        mark_spent(&pool, tx).await?;
-
-        save_inputs(&pool, transaction_id, tx).await?;
-
-        save_outputs(&pool, transaction_id, tx).await?;
-
-        println!(
-            "Saved transaction {} with {} input(s) and {} output(s)",
-            tx.compute_txid(),
-            tx.input.len(),
-            tx.output.len()
-        );
-    }
-    println!("Transactions saved to database!");
-
-    BlockProcessor::print_info(height, &hash, &block);
-
-    TransactionProcessor::print_transactions(&block);
+    // Stay running and react to new Bitcoin blocks.
+    run_zmq_listener(&config.zmq_block_url, &rpc, &pool).await?;
 
     Ok(())
 }

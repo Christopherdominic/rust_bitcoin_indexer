@@ -1,9 +1,9 @@
 use anyhow::Result;
 use bitcoin::{Block, BlockHash};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 pub async fn save_block(
-    pool: &PgPool,
+    db: &mut Transaction<'_, Postgres>,
     height: u64,
     hash: &BlockHash,
     block: &Block,
@@ -34,8 +34,16 @@ pub async fn save_block(
     .bind(block.header.prev_blockhash.to_string())
     .bind(block.header.time as i64)
     .bind(block.txdata.len() as i32)
-    .fetch_one(pool)
+    .fetch_one(&mut **db)
     .await?;
 
     Ok(block_id)
+}
+
+pub async fn get_last_indexed_height(pool: &PgPool) -> Result<Option<i64>> {
+    let height: Option<i64> = sqlx::query_scalar("SELECT MAX(height) FROM blocks")
+        .fetch_one(pool)
+        .await?;
+
+    Ok(height)
 }
