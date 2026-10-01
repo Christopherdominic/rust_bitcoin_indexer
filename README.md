@@ -1,6 +1,6 @@
 # Amiable Bitcoin Indexer
 
-A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Core node over JSON-RPC, stores blocks, transactions, inputs and outputs in PostgreSQL, and tracks which outputs have been spent. After catching up with the chain, it keeps running and indexes each new block as Bitcoin Core announces it over ZMQ.
+A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Core node over JSON-RPC, stores blocks, transactions, inputs and outputs in PostgreSQL, and tracks which outputs have been spent. After catching up with the chain, it keeps running and indexes each new block as Bitcoin Core announces it over ZMQ. A small HTTP API lets you query the indexed data.
 
 ```
 ╭────────────────────────────────────────╮
@@ -24,6 +24,10 @@ A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Cor
   ✔ Indexed block #812,341 · 3,104 tx
   ...
 
+━━ API
+  ✔ API listening
+    url            http://127.0.0.1:3000
+
 ━━ Live mode
   ✔ ZMQ listener connected
   ◌ Listening for new blocks…
@@ -36,6 +40,7 @@ A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Cor
 - **Atomic writes:** each block, including all its transactions, inputs and outputs, is written in a single database transaction.
 - **UTXO tracking:** when an input spends an already-indexed output, the output is marked `spent`, along with the spending `txid` and `vin`.
 - **Idempotent:** upserts (`ON CONFLICT … DO UPDATE`) make it safe to re-index a block.
+- **HTTP API:** JSON endpoints for indexer status, blocks, transactions and UTXOs.
 - **Readable terminal output:** colored, structured logs. Color turns off automatically when output is piped or `NO_COLOR` is set.
 
 ## How it works
@@ -122,13 +127,36 @@ To turn off colored output:
 NO_COLOR=1 cargo run --release
 ```
 
+## HTTP API
+
+The API starts after the historical sync finishes. It listens on `http://127.0.0.1:3000` and runs alongside the ZMQ listener. All responses are JSON.
+
+| Method | Path                       | Description                                                                 |
+| ------ | -------------------------- | --------------------------------------------------------------------------- |
+| GET    | `/health`                  | Liveness check: `{"status":"ok"}`                                           |
+| GET    | `/api/status`              | Highest indexed height plus row counts for blocks, txs, inputs, outputs and unspent outputs |
+| GET    | `/api/blocks/{height}`     | Block at a height. Returns `404` if that height isn't indexed               |
+| GET    | `/api/transactions/{txid}` | Transaction details with its inputs and outputs, including spend status. Returns `404` if not found |
+| GET    | `/api/utxos`               | The 100 most recently indexed unspent outputs                               |
+
+Examples:
+
+```sh
+curl http://127.0.0.1:3000/api/status
+curl http://127.0.0.1:3000/api/blocks/0
+curl http://127.0.0.1:3000/api/transactions/<txid>
+```
+
+Values are in satoshis. Database errors return `500`.
+
 ## Project structure
 
 ```
 src/
-├── main.rs            # Startup: config, connections, sync, then live mode
+├── main.rs            # Startup: config, connections, sync, then API + live mode
 ├── config.rs          # Loads settings from environment / .env
 ├── ui.rs              # Terminal output formatting (presentation only)
+├── api/               # HTTP API (axum): routes, handlers, shared state
 ├── rpc/bitcoin.rs     # Bitcoin Core RPC client wrapper
 ├── indexer/
 │   ├── block.rs       # Fetch and decode raw blocks
@@ -142,5 +170,6 @@ src/
 
 - **No reorg handling:** if a block at an already-indexed height is replaced, the indexer doesn't detect or roll it back.
 - **Outputs are only marked spent if already indexed:** if you index from partway through the chain, spends of earlier outputs are logged as warnings.
+- The API address (`127.0.0.1:3000`) is hard-coded, and the API has no authentication or pagination.
 - The `outputs.address` column exists but isn't populated yet.
 - Blocks are indexed one at a time over RPC, so a full mainnet sync from genesis takes a long time.

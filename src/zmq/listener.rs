@@ -32,7 +32,10 @@ pub async fn run_zmq_listener(endpoint: &str, rpc: &BitcoinRpc, pool: &PgPool) -
             }
 
             Ok(other) => {
-                ui::info(format!("Ignoring ZMQ message on topic: {}", other.topic_str()));
+                ui::info(format!(
+                    "Ignoring ZMQ message on topic: {}",
+                    other.topic_str()
+                ));
             }
 
             Err(error) => {
