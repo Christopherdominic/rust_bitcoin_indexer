@@ -1,6 +1,6 @@
 # Amiable Bitcoin Indexer
 
-A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Core node over JSON-RPC, stores blocks, transactions, inputs and outputs in PostgreSQL, and tracks which outputs have been spent. After catching up with the chain, it keeps running and indexes each new block as Bitcoin Core announces it over ZMQ. A small HTTP API lets you query the indexed data.
+A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Core node over JSON-RPC, stores blocks, transactions, inputs and outputs in PostgreSQL, and tracks which outputs have been spent. After catching up with the chain, it keeps running and indexes each new block as Bitcoin Core announces it over ZMQ. An HTTP API exposes the indexed data, and a Next.js frontend in [`frontend/`](frontend/) lets you browse it.
 
 ```
 ╭────────────────────────────────────────╮
@@ -40,7 +40,10 @@ A Bitcoin blockchain indexer written in Rust. It reads blocks from a Bitcoin Cor
 - **Atomic writes:** each block, including all its transactions, inputs and outputs, is written in a single database transaction.
 - **UTXO tracking:** when an input spends an already-indexed output, the output is marked `spent`, along with the spending `txid` and `vin`.
 - **Idempotent:** upserts (`ON CONFLICT … DO UPDATE`) make it safe to re-index a block.
-- **HTTP API:** JSON endpoints for indexer status, blocks, transactions and UTXOs.
+- **Address indexing:** each output's `scriptPubKey` is decoded to a regtest address (outputs without one, such as `OP_RETURN`, store `NULL`), so balances, UTXOs and history can be queried per address.
+- **HTTP API:** JSON endpoints for indexer status, blocks, transactions, UTXOs, addresses and search. CORS is enabled so a browser frontend can call it directly.
+- **Address watch:** a stored watch list of addresses, with their indexed activity queryable through the API.
+- **Explorer frontend:** a Next.js UI for blocks, transactions, addresses, the UTXO set and the watch list (see [Frontend](#frontend)).
 - **Readable terminal output:** colored, structured logs. Color turns off automatically when output is piped or `NO_COLOR` is set.
 
 ## How it works
@@ -111,7 +114,8 @@ done
 | `blocks`       | height, hash, previous hash, timestamp, transaction count                |
 | `transactions` | txid, block, position in block, version, lock time, coinbase flag        |
 | `inputs`       | previous outpoint (`prev_txid`, `prev_vout`), `script_sig`, sequence     |
-| `outputs`      | value (sats), `script_pubkey`, spent flag, spending `txid`/`vin`         |
+| `outputs`      | value (sats), `script_pubkey`, address, spent flag, spending `txid`/`vin` |
+| `watched_addresses` | addresses on the watch list, with the time they were added          |
 
 ## Running
 
@@ -135,19 +139,56 @@ The API starts after the historical sync finishes. It listens on `http://127.0.0
 | ------ | -------------------------- | --------------------------------------------------------------------------- |
 | GET    | `/health`                  | Liveness check: `{"status":"ok"}`                                           |
 | GET    | `/api/status`              | Highest indexed height plus row counts for blocks, txs, inputs, outputs and unspent outputs |
-| GET    | `/api/blocks/{height}`     | Block at a height. Returns `404` if that height isn't indexed               |
+| GET    | `/api/blocks?limit=&offset=` | Blocks, newest first. `limit` defaults to 20 (max 100), `offset` to 0     |
+| GET    | `/api/blocks/{height}`     | Block at a height, with its transaction IDs. Returns `404` if not indexed   |
+| GET    | `/api/blocks/hash/{hash}`  | Same as above, looked up by block hash                                      |
 | GET    | `/api/transactions/{txid}` | Transaction details with its inputs and outputs, including spend status. Returns `404` if not found |
 | GET    | `/api/utxos`               | The 100 most recently indexed unspent outputs                               |
+| GET    | `/api/addresses/{address}` | Received, spent, balance and transaction count. Returns `404` if the address has no indexed outputs |
+| GET    | `/api/addresses/{address}/utxos` | Unspent outputs paying to the address                                 |
+| GET    | `/api/addresses/{address}/transactions` | Indexed outputs paying to the address, with block height, timestamp and spend status |
+| GET    | `/api/search/{query}`      | Resolves a block height, block hash, txid or address to `{"result_type", "value"}`. Returns `404` if nothing matches |
+| POST   | `/api/watch/{address}`     | Adds an indexed address to the watch list. Returns `201`, or `404` if the address has no indexed outputs |
+| GET    | `/api/watch`               | Watched addresses, newest first                                             |
+| GET    | `/api/watch/{address}`     | Received, balance, transaction count and latest activity for a watched address. Returns `404` if not watched |
+| DELETE | `/api/watch/{address}`     | Removes an address from the watch list. Returns `204`, or `404` if it wasn't watched |
 
 Examples:
 
 ```sh
 curl http://127.0.0.1:3000/api/status
-curl http://127.0.0.1:3000/api/blocks/0
+curl "http://127.0.0.1:3000/api/blocks?limit=5&offset=0"
 curl http://127.0.0.1:3000/api/transactions/<txid>
+curl http://127.0.0.1:3000/api/search/<height|hash|txid|address>
+curl -X POST http://127.0.0.1:3000/api/watch/<address>
 ```
 
-Values are in satoshis. Database errors return `500`.
+Values are in satoshis. Database errors return `500`. Address watch is a stored list you query; it doesn't push notifications.
+
+## Frontend
+
+[`frontend/`](frontend/) is a Next.js + TypeScript + Tailwind explorer for the indexer. The browser calls the API above directly; there's no separate backend.
+
+```sh
+cd frontend
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
+npm install
+npm run dev                  # http://localhost:3001
+```
+
+Start the indexer first so the API is up. The frontend uses port 3001 to stay clear of the API on 3000.
+
+| Page               | Shows                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| `/`                | Search, indexer stats, latest blocks, live API status          |
+| `/blocks`          | Paginated block list                                           |
+| `/block/{height}`  | Block header and its transactions (also accepts a block hash)  |
+| `/tx/{txid}`       | Inputs and outputs with spent/unspent state                    |
+| `/address/{address}` | Balance, UTXOs, received outputs, watch/unwatch              |
+| `/utxos`           | The indexed UTXO set                                           |
+| `/watch`           | Watch list: add, view activity, remove                         |
+
+See [`frontend/README.md`](frontend/README.md) for details.
 
 ## Project structure
 
@@ -164,12 +205,13 @@ src/
 ├── zmq/listener.rs    # ZMQ new-block subscription
 ├── db/                # PostgreSQL persistence (blocks, txs, inputs, outputs, UTXO)
 └── migrations/        # SQL schema
+frontend/              # Next.js explorer UI (see Frontend above)
 ```
 
 ## Limitations
 
 - **No reorg handling:** if a block at an already-indexed height is replaced, the indexer doesn't detect or roll it back.
 - **Outputs are only marked spent if already indexed:** if you index from partway through the chain, spends of earlier outputs are logged as warnings.
-- The API address (`127.0.0.1:3000`) is hard-coded, and the API has no authentication or pagination.
-- The `outputs.address` column exists but isn't populated yet.
+- The API address (`127.0.0.1:3000`) is hard-coded, and the API has no authentication. Only `/api/blocks` is paginated; `/api/utxos` returns at most 100 rows.
+- Addresses are decoded for **regtest** only (`Network::Regtest` is hard-coded). Outputs indexed before address decoding was added have a `NULL` address until their block is re-indexed.
 - Blocks are indexed one at a time over RPC, so a full mainnet sync from genesis takes a long time.

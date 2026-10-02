@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  /* Surfaces — near-black with a warm undertone */
+  --color-bg: #0c0b0a;
+  --color-surface: #121110;
+  --color-raised: #1b1917;
+  --color-line: #262320;
+  --color-line-strong: #3a3530;
+
+  /* Text */
+  --color-fg: #ebe6df;
+  --color-muted: #a1998f;
+  --color-faint: #6c655d;
+
+  /* Signal colours */
+  --color-btc: #f7931a;
+  --color-btc-soft: #f7931a1f;
+  --color-ok: #5fb97f;
+  --color-ok-soft: #5fb97f1a;
+  --color-bad: #e2685a;
+  --color-bad-soft: #e2685a1a;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+}
+
+::selection {
+  background: #f7931a40;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-btc);
+  outline-offset: 2px;
+}
+
+/* Section label: small, tracked, uppercase */
+@utility label {
+  @apply text-[11px] font-medium tracking-[0.08em] text-faint uppercase;
+}
+
+@utility num {
+  @apply font-mono tabular-nums;
+}
+
+@utility btn {
+  @apply inline-flex h-8 items-center gap-1.5 rounded border border-line-strong bg-surface px-3 text-xs font-medium text-fg transition-colors hover:border-faint hover:bg-raised disabled:pointer-events-none disabled:opacity-40;
+}
+
+@utility btn-accent {
+  @apply border-btc/60 text-btc hover:border-btc hover:bg-btc-soft;
+}
+
+@utility btn-danger {
+  @apply border-bad/50 text-bad hover:border-bad hover:bg-bad-soft;
+}
+
+/* Data tables */
+@layer components {
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table th {
+    @apply border-b border-line bg-surface px-4 py-2.5 text-left text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-faint uppercase;
+  }
+  .data-table td {
+    @apply border-b border-line px-4 py-2.5 align-middle;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr {
+    @apply transition-colors hover:bg-raised/50;
+  }
+}
