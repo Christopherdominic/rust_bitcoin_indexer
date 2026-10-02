@@ -20,7 +20,8 @@ const ORANGE: &str = "\x1b[38;5;208m";
 
 fn color_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal())
+    *ENABLED
+        .get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal())
 }
 
 fn paint(style: &str, text: impl Display) -> String {
@@ -95,7 +96,11 @@ pub fn info(msg: impl Display) {
 }
 
 pub fn field(label: &str, value: impl Display) {
-    println!("    {} {}", paint(DIM, format!("{label:<14}")), paint(CYAN, value));
+    println!(
+        "    {} {}",
+        paint(DIM, format!("{label:<14}")),
+        paint(CYAN, value)
+    );
 }
 
 pub fn warn(msg: impl Display) {
@@ -107,7 +112,11 @@ pub fn error(msg: impl Display) {
 }
 
 pub fn waiting() {
-    println!("  {} {}", paint(DIM, "◌"), paint(DIM, "Listening for new blocks…"));
+    println!(
+        "  {} {}",
+        paint(DIM, "◌"),
+        paint(DIM, "Listening for new blocks…")
+    );
 }
 
 pub fn block_start(height: u64) {
