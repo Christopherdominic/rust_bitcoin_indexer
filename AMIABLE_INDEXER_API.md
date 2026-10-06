@@ -17,24 +17,19 @@ Local development:
 
 `http://127.0.0.1:3000`
 
-Current temporary demo tunnel:
-
-`https://girlfriend-remedy-dash-precipitation.trycloudflare.com`
-
-The `trycloudflare.com` URL is temporary and may change whenever the
-Quick Tunnel is restarted. The frontend should therefore keep the base
-URL in an environment variable rather than hard-code it.
+Public demo deployments use a different base URL. The frontend should
+keep the base URL in an environment variable rather than hard-code it.
 
 Example:
 
 ``` env
-VITE_API_URL=https://girlfriend-remedy-dash-precipitation.trycloudflare.com
+VITE_API_URL=http://127.0.0.1:3000
 ```
 
 or for Next.js:
 
 ``` env
-NEXT_PUBLIC_API_URL=https://girlfriend-remedy-dash-precipitation.trycloudflare.com
+NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
 ```
 
 ## 3. Endpoint Summary
@@ -603,17 +598,17 @@ restricted to the actual frontend origin for a production deployment.
 4.  Keep the API base URL in a frontend environment variable.
 5.  Do not give the frontend Bitcoin RPC credentials, ZMQ endpoints,
     `DATABASE_URL`, or the indexer's `.env`.
-6.  The current Cloudflare Quick Tunnel is for demonstration/development
-    and can change after restart.
+6.  Any public demo URL is for demonstration/development only and may
+    change.
 7.  The API currently has no authentication or rate limiting; do not
-    treat the temporary public tunnel as a production service.
+    treat a public demo deployment as a production service.
 8.  Address Watch is currently a stored watch list plus queryable
     indexed activity, not Telegram/email/webhook push notifications.
 
 ## 17. Quick Integration Test
 
 ``` bash
-API_URL="https://girlfriend-remedy-dash-precipitation.trycloudflare.com"
+API_URL="http://127.0.0.1:3000"
 
 curl -s "$API_URL/api/status" | jq
 curl -s "$API_URL/api/blocks?limit=5&offset=0" | jq
