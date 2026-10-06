@@ -60,11 +60,12 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let unspent_outputs: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM outputs WHERE spent = FALSE")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let unspent_outputs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM outputs WHERE spent = FALSE AND script_pubkey NOT LIKE 'OP_RETURN%'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(StatusResponse {
         indexed_height,
@@ -408,6 +409,7 @@ pub async fn get_utxos(
         JOIN transactions t
             ON t.id = o.transaction_id
         WHERE o.spent = FALSE
+          AND o.script_pubkey NOT LIKE 'OP_RETURN%'
         ORDER BY o.id DESC
         LIMIT 100
         "#,
@@ -558,6 +560,7 @@ pub async fn get_address_utxos(
             ON t.id = o.transaction_id
         WHERE o.address = $1
           AND o.spent = FALSE
+          AND o.script_pubkey NOT LIKE 'OP_RETURN%'
         ORDER BY o.id DESC
         "#,
     )

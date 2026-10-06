@@ -6,7 +6,7 @@ import { useIndexerStatus } from "@/components/StatusProvider";
 import { PageHeader, Panel, Sats } from "@/components/ui";
 import { UtxoTable } from "@/components/UtxoTable";
 import { getUtxos } from "@/lib/api";
-import { formatNumber, percent } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 import { useApi } from "@/lib/use-api";
 
 /** GET /api/utxos returns at most this many rows, newest first. */
@@ -22,22 +22,12 @@ export function UtxoSet() {
   return (
     <div className="space-y-6">
       <PageHeader kicker="State" title="UTXO set">
-        Unspent outputs tracked by the indexer. Outputs are marked spent as inputs referencing them are indexed.
+        Unspent, spendable outputs tracked by the indexer. Provably unspendable OP_RETURN outputs are not part of the set.
       </PageHeader>
 
-      <section className="grid overflow-hidden rounded-md border border-line bg-surface sm:grid-cols-3" aria-label="UTXO totals">
+      <section className="grid overflow-hidden rounded-md border border-line bg-surface sm:grid-cols-2" aria-label="UTXO totals">
         <Cell label="Unspent outputs">
           {status ? <span className="num text-2xl text-btc">{formatNumber(status.unspent_outputs)}</span> : <Skeleton className="h-7 w-20" />}
-        </Cell>
-        <Cell label="Spent outputs">
-          {status ? (
-            <span className="num text-2xl text-fg">
-              {formatNumber(status.outputs - status.unspent_outputs)}
-              <span className="ml-2 text-xs text-faint">{percent(status.outputs - status.unspent_outputs, status.outputs)} of outputs</span>
-            </span>
-          ) : (
-            <Skeleton className="h-7 w-20" />
-          )}
         </Cell>
         <Cell label={capped ? `Value of ${API_ROW_LIMIT} newest` : "Value shown"}>
           {shownValue !== undefined ? <Sats value={shownValue} btc /> : <Skeleton className="h-7 w-32" />}
@@ -45,11 +35,11 @@ export function UtxoSet() {
       </section>
 
       <Panel
-        title="Unspent outputs"
+        title={capped ? `Newest ${API_ROW_LIMIT} UTXOs` : "UTXOs"}
         meta={
           data
             ? capped
-              ? `Newest ${API_ROW_LIMIT} by creation — the API caps this list at ${API_ROW_LIMIT} rows`
+              ? `the API returns at most ${API_ROW_LIMIT} rows`
               : `${formatNumber(data.length)} rows, newest first`
             : undefined
         }

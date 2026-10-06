@@ -37,4 +37,4 @@ pub fn create_router(state: AppState) -> Router {
         )
         .layer(CorsLayer::permissive())
         .with_state(state)
-    }
+}
