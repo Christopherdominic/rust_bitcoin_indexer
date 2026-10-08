@@ -74,7 +74,12 @@ async fn main() -> Result<()> {
             .map_err(anyhow::Error::from)
     };
 
-    let zmq_listener = run_zmq_listener(&config.zmq_block_url, &rpc, &pool);
+    let zmq_listener = run_zmq_listener(
+        &config.zmq_block_url,
+        config.zmq_tx_url.as_deref(),
+        &rpc,
+        &pool,
+    );
 
     tokio::try_join!(api_server, zmq_listener)?;
 

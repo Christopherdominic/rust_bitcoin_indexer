@@ -14,7 +14,9 @@ use bitcoin::{
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
 
+use crate::db::mempool::MempoolEntry;
 use crate::indexer::chain::ChainSource;
+use crate::indexer::mempool::MempoolSource;
 
 // ------------------------------------------------------------
 // IN-MEMORY CHAIN
@@ -50,6 +52,56 @@ impl ChainSource for MockChain {
             .get(hash)
             .cloned()
             .ok_or_else(|| anyhow!("unknown block {hash}"))
+    }
+}
+
+// ------------------------------------------------------------
+// IN-MEMORY MEMPOOL
+// ------------------------------------------------------------
+
+/// Bitcoin Core's mempool held in memory.
+#[derive(Default)]
+pub struct MockMempool {
+    pub txs: HashMap<Txid, (MempoolEntry, Transaction)>,
+    /// Listed by `mempool()` but gone by the time it is fetched, as when
+    /// a transaction is evicted between the two RPC calls.
+    pub vanishing: Vec<Txid>,
+}
+
+impl MockMempool {
+    pub fn with(txs: &[Transaction]) -> Self {
+        let mut mempool = Self::default();
+        for (i, tx) in txs.iter().enumerate() {
+            mempool.txs.insert(
+                tx.compute_txid(),
+                (
+                    MempoolEntry {
+                        fee: 1_000 + i as u64,
+                        vsize: 110,
+                        entered_at: 1_800_000_000 + i as u64,
+                    },
+                    tx.clone(),
+                ),
+            );
+        }
+        mempool
+    }
+}
+
+impl MempoolSource for MockMempool {
+    fn mempool(&self) -> Result<HashMap<Txid, MempoolEntry>> {
+        Ok(self
+            .txs
+            .iter()
+            .map(|(txid, (entry, _))| (*txid, *entry))
+            .collect())
+    }
+
+    fn mempool_transaction(&self, txid: &Txid) -> Result<Option<Transaction>> {
+        if self.vanishing.contains(txid) {
+            return Ok(None);
+        }
+        Ok(self.txs.get(txid).map(|(_, tx)| tx.clone()))
     }
 }
 

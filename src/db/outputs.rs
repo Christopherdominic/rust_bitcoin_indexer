@@ -1,6 +1,16 @@
 use anyhow::Result;
-use bitcoin::{Address, Network, Transaction as BitcoinTransaction};
+use bitcoin::{Address, Network, Script, Transaction as BitcoinTransaction};
 use sqlx::{Postgres, Transaction};
+
+/// Converts a scriptPubKey into a standard Bitcoin regtest address.
+///
+/// Some outputs, such as OP_RETURN outputs, do not correspond to an
+/// address. In that case we store NULL.
+pub fn output_address(script_pubkey: &Script) -> Option<String> {
+    Address::from_script(script_pubkey, Network::Regtest)
+        .ok()
+        .map(|address| address.to_string())
+}
 
 pub async fn save_outputs(
     db: &mut Transaction<'_, Postgres>,
@@ -8,14 +18,7 @@ pub async fn save_outputs(
     tx: &BitcoinTransaction,
 ) -> Result<()> {
     for (vout, output) in tx.output.iter().enumerate() {
-        // Try to convert the scriptPubKey into a standard
-        // Bitcoin regtest address.
-        //
-        // Some outputs, such as OP_RETURN outputs, do not
-        // correspond to an address. In that case we store NULL.
-        let address = Address::from_script(&output.script_pubkey, Network::Regtest)
-            .ok()
-            .map(|address| address.to_string());
+        let address = output_address(&output.script_pubkey);
 
         sqlx::query(
             r#"

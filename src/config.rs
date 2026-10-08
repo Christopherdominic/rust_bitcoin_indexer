@@ -8,6 +8,9 @@ pub struct Config {
     pub rpc_password: String,
     pub database_url: String,
     pub zmq_block_url: String,
+    /// Optional `zmqpubrawtx` endpoint. Without it the mempool is only
+    /// refreshed at startup and on each new block.
+    pub zmq_tx_url: Option<String>,
 }
 
 impl Config {
@@ -20,6 +23,7 @@ impl Config {
             rpc_password: env::var("BITCOIN_RPC_PASSWORD")?,
             database_url: env::var("DATABASE_URL")?,
             zmq_block_url: env::var("ZMQ_BLOCK_URL")?,
+            zmq_tx_url: env::var("ZMQ_TX_URL").ok().filter(|url| !url.is_empty()),
         })
     }
 }

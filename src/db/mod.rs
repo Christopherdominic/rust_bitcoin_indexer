@@ -1,5 +1,6 @@
 pub mod blocks;
 pub mod inputs;
+pub mod mempool;
 pub mod outputs;
 pub mod postgres;
 pub mod reorg;

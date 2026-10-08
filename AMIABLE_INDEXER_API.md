@@ -53,6 +53,15 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
   GET                     `/api/utxos`                              Recent indexed unspent
                                                                     outputs
 
+  GET                     `/api/transactions/{txid}/status`         Confirmed /
+                                                                    unconfirmed status
+
+  GET                     `/api/mempool`                            Unconfirmed
+                                                                    transactions
+
+  GET                     `/api/mempool/{txid}`                     Unconfirmed
+                                                                    transaction detail
+
   GET                     `/api/addresses/{address}`                Address summary
 
   GET                     `/api/addresses/{address}/utxos`          Address UTXOs
@@ -283,6 +292,66 @@ and receiving 0.6 BTC change in the same transaction is one row with
 Summed over the history, `received` and `sent` equal the address
 summary's `received` and `spent`, and the number of rows equals its
 `transaction_count`.
+
+### Unconfirmed transactions (mempool)
+
+The indexer mirrors Bitcoin Core's mempool in separate tables. Mempool
+data is a snapshot, not canonical chain state: it never changes the UTXO
+set, address balances or address history, which are confirmed-only.
+
+#### GET `/api/transactions/{txid}/status`
+
+``` json
+{ "txid": "…", "status": "unconfirmed", "block_height": null,
+  "block_hash": null, "confirmations": null, "entered_at": 1790900000 }
+```
+
+After the transaction is mined:
+
+``` json
+{ "txid": "…", "status": "confirmed", "block_height": 341,
+  "block_hash": "…", "confirmations": 1, "entered_at": null }
+```
+
+Returns 404 if the transaction is neither indexed nor in the mempool
+(for example evicted, replaced, or not yet seen). `confirmations` is
+counted against the indexer's tip.
+
+#### GET `/api/mempool`
+
+Unconfirmed transactions, newest first:
+
+``` json
+[
+  { "txid": "…", "fee": 2820, "vsize": 141, "fee_rate": 20.0,
+    "entered_at": 1790900000, "input_count": 1, "output_count": 2,
+    "output_value": 99997180 }
+]
+```
+
+`fee` and `vsize` come from Bitcoin Core; `fee_rate` is sat/vB.
+
+#### GET `/api/mempool/{txid}`
+
+``` json
+{
+  "transaction": { "txid": "…", "version": 2, "lock_time": 340, "fee": 2820,
+                   "vsize": 141, "fee_rate": 20.0, "entered_at": 1790900000 },
+  "inputs": [
+    { "vin": 0, "prev_txid": "…", "prev_vout": 0, "script_sig": "",
+      "sequence": 4294967293, "prev_value": 100000000,
+      "prev_address": "bcrt1q…", "prev_source": "confirmed" }
+  ],
+  "outputs": [
+    { "vout": 0, "value": 99997180, "script_pubkey": "OP_0 OP_PUSHBYTES_20 …",
+      "address": "bcrt1q…", "spent_by_mempool_txid": null }
+  ]
+}
+```
+
+`prev_source` is `"confirmed"`, `"mempool"` (spends another unconfirmed
+transaction) or `null` (output unknown to the indexer). Returns 404 once
+the transaction is confirmed; use `/api/transactions/{txid}` then.
 
 ## 8. Universal Search
 

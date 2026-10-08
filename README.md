@@ -73,6 +73,7 @@ server=1
 rpcuser=your_rpc_user
 rpcpassword=your_rpc_password
 zmqpubrawblock=tcp://127.0.0.1:28332
+zmqpubrawtx=tcp://127.0.0.1:28333
 ```
 
 Blocks are fetched by height, so the node must still have the blocks you want to index. A pruned node can't serve blocks it has already pruned.
@@ -87,6 +88,7 @@ BITCOIN_RPC_USER=your_rpc_user
 BITCOIN_RPC_PASSWORD=your_rpc_password
 DATABASE_URL=postgresql://user:password@localhost:5432/bitcoin_indexer
 ZMQ_BLOCK_URL=tcp://127.0.0.1:28332
+ZMQ_TX_URL=tcp://127.0.0.1:28333
 ```
 
 | Variable               | Description                                  |
@@ -96,8 +98,9 @@ ZMQ_BLOCK_URL=tcp://127.0.0.1:28332
 | `BITCOIN_RPC_PASSWORD` | RPC password                                 |
 | `DATABASE_URL`         | PostgreSQL connection string                 |
 | `ZMQ_BLOCK_URL`        | Bitcoin Core `zmqpubrawblock` endpoint       |
+| `ZMQ_TX_URL`           | Optional `zmqpubrawtx` endpoint for live mempool updates |
 
-All five are required. Don't commit real credentials.
+The first five are required. Without `ZMQ_TX_URL`, the mempool is only refreshed at startup and when a block arrives. In Polar, `rawtx` is published on a different host port from `rawblock`; check the node's port mappings. Don't commit real credentials.
 
 ## Database setup
 
