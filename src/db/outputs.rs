@@ -159,10 +159,12 @@ mod tests {
         assert!(!is_provably_unspendable(&script(vec![0x51; 10_000])));
 
         // Core keeps these in its UTXO set although they can never be spent;
-        // rust-bitcoin's broader helper would drop them.
+        // rust-bitcoin's broader (and deprecated) helper would drop them.
         for bytes in [vec![0x7e], vec![0xbb, 0x51]] {
             let s = script(bytes);
-            assert!(s.is_provably_unspendable(), "rust-bitcoin: {s}");
+            #[allow(deprecated)]
+            let rust_bitcoin_says = s.is_provably_unspendable();
+            assert!(rust_bitcoin_says, "rust-bitcoin: {s}");
             assert!(!is_provably_unspendable(&s), "Core: {s}");
         }
     }

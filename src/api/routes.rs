@@ -9,7 +9,7 @@ use crate::api::{
 };
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{get, post},
 };
 use tower_http::cors::CorsLayer;
 

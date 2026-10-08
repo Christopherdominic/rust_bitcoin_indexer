@@ -35,7 +35,7 @@ The indexer API must be running (`cargo run` in the repo root serves it on `127.
 | `/blocks`          | Paginated block list (`?page=n`, 25 per page)                 |
 | `/block/[height]`  | Block header + transactions. Also accepts a 64-char block hash |
 | `/tx/[txid]`       | Transaction summary, inputs, outputs with spent/unspent state |
-| `/address/[addr]`  | Balance, UTXOs, received outputs, watch toggle                |
+| `/address/[addr]`  | Balance, UTXOs, transaction history (received/sent), watch toggle |
 | `/utxos`           | Indexed UTXO set (newest 100, the API's limit)                |
 | `/watch`           | Watch list: add, view activity, remove                        |
 
