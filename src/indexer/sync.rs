@@ -146,12 +146,14 @@ mod tests {
     use std::cell::Cell;
 
     use bitcoin::hashes::Hash;
-    use bitcoin::{Block, BlockHash, OutPoint, Txid};
+    use bitcoin::{Block, BlockHash, OutPoint};
 
     use super::*;
     use crate::{
         db::reorg::{Rollback, rollback_to},
-        test_support::{MockChain, TestDb, build_chain, coinbase, push_block, spend},
+        test_support::{
+            MockChain, TestDb, build_chain, coinbase, output_state, push_block, spend, tx_height,
+        },
     };
 
     async fn indexed_hashes(pool: &PgPool) -> Vec<String> {
@@ -163,37 +165,6 @@ mod tests {
 
     fn hashes(blocks: &[Block]) -> Vec<String> {
         blocks.iter().map(|b| b.block_hash().to_string()).collect()
-    }
-
-    /// `(spent, spent_by_txid, spent_by_vin)` for an outpoint.
-    async fn output_state(
-        pool: &PgPool,
-        outpoint: OutPoint,
-    ) -> (bool, Option<String>, Option<i32>) {
-        sqlx::query_as(
-            r#"
-            SELECT o.spent, o.spent_by_txid, o.spent_by_vin
-            FROM outputs o
-            JOIN transactions t ON t.id = o.transaction_id
-            WHERE t.txid = $1 AND o.vout = $2
-            "#,
-        )
-        .bind(outpoint.txid.to_string())
-        .bind(outpoint.vout as i32)
-        .fetch_one(pool)
-        .await
-        .unwrap()
-    }
-
-    /// Height of the block holding `txid`, if it is indexed.
-    async fn tx_height(pool: &PgPool, txid: Txid) -> Option<i64> {
-        sqlx::query_scalar(
-            "SELECT b.height FROM transactions t JOIN blocks b ON b.id = t.block_id WHERE t.txid = $1",
-        )
-        .bind(txid.to_string())
-        .fetch_optional(pool)
-        .await
-        .unwrap()
     }
 
     fn coinbase_out(height: u64, branch: char) -> OutPoint {

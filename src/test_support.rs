@@ -9,7 +9,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::transaction::Version;
 use bitcoin::{
     Amount, Block, BlockHash, CompactTarget, OutPoint, ScriptBuf, Sequence, Transaction, TxIn,
-    TxMerkleNode, TxOut, WPubkeyHash, Witness, absolute::LockTime,
+    TxMerkleNode, TxOut, Txid, WPubkeyHash, Witness, absolute::LockTime,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, PgPool};
@@ -85,19 +85,32 @@ pub fn coinbase(height: u64, branch: char) -> Transaction {
 
 /// A transaction spending `prev` into one output.
 pub fn spend(prev: OutPoint, value: u64) -> Transaction {
+    tx(&[prev], vec![out(value, p2wpkh(2))])
+}
+
+/// An output paying `value` sats to `script_pubkey`.
+pub fn out(value: u64, script_pubkey: ScriptBuf) -> TxOut {
+    TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey,
+    }
+}
+
+/// A non-coinbase transaction spending `inputs` (in vin order) into `outputs`.
+pub fn tx(inputs: &[OutPoint], outputs: Vec<TxOut>) -> Transaction {
     Transaction {
         version: Version::TWO,
         lock_time: LockTime::ZERO,
-        input: vec![TxIn {
-            previous_output: prev,
-            script_sig: ScriptBuf::new(),
-            sequence: Sequence::MAX,
-            witness: Witness::new(),
-        }],
-        output: vec![TxOut {
-            value: Amount::from_sat(value),
-            script_pubkey: p2wpkh(2),
-        }],
+        input: inputs
+            .iter()
+            .map(|prev| TxIn {
+                previous_output: *prev,
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            })
+            .collect(),
+        output: outputs,
     }
 }
 
@@ -105,7 +118,11 @@ pub fn spend(prev: OutPoint, value: u64) -> Transaction {
 pub fn block(prev: BlockHash, height: u64, branch: char, txs: Vec<Transaction>) -> Block {
     let mut txdata = vec![coinbase(height, branch)];
     txdata.extend(txs);
+    block_with_txdata(prev, height, txdata)
+}
 
+/// A block on top of `prev` holding exactly `txdata` (coinbase included).
+pub fn block_with_txdata(prev: BlockHash, height: u64, txdata: Vec<Transaction>) -> Block {
     let mut block = Block {
         header: Header {
             version: BlockVersion::ONE,
@@ -140,6 +157,41 @@ pub fn push_block(blocks: &mut Vec<Block>, branch: char, txs: Vec<Transaction>) 
     let height = blocks.len() as u64;
     let prev = blocks.last().expect("chain has genesis").block_hash();
     blocks.push(block(prev, height, branch, txs));
+}
+
+// ------------------------------------------------------------
+// DATABASE INSPECTION
+// ------------------------------------------------------------
+
+/// `(spent, spent_by_txid, spent_by_vin)` for an outpoint.
+pub async fn output_state(
+    pool: &PgPool,
+    outpoint: OutPoint,
+) -> (bool, Option<String>, Option<i32>) {
+    sqlx::query_as(
+        r#"
+        SELECT o.spent, o.spent_by_txid, o.spent_by_vin
+        FROM outputs o
+        JOIN transactions t ON t.id = o.transaction_id
+        WHERE t.txid = $1 AND o.vout = $2
+        "#,
+    )
+    .bind(outpoint.txid.to_string())
+    .bind(outpoint.vout as i32)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Height of the block holding `txid`, if it is indexed.
+pub async fn tx_height(pool: &PgPool, txid: Txid) -> Option<i64> {
+    sqlx::query_scalar(
+        "SELECT b.height FROM transactions t JOIN blocks b ON b.id = t.block_id WHERE t.txid = $1",
+    )
+    .bind(txid.to_string())
+    .fetch_optional(pool)
+    .await
+    .unwrap()
 }
 
 // ------------------------------------------------------------

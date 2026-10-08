@@ -971,3 +971,7 @@ pub async fn unwatch_address(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+#[path = "handlers_tests.rs"]
+mod tests;
