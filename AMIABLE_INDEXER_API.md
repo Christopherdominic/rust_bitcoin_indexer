@@ -62,6 +62,9 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
   GET                     `/api/mempool/{txid}`                     Unconfirmed
                                                                     transaction detail
 
+  GET                     `/api/utxos/summary`                      Outputs by
+                                                                    category
+
   GET                     `/api/addresses/{address}`                Address summary
 
   GET                     `/api/addresses/{address}/utxos`          Address UTXOs
@@ -172,27 +175,64 @@ outpoints, scripts, values and spend state where applicable.
 
 ### GET `/api/utxos`
 
-Returns up to the current API limit of recent indexed outputs whose
-`spent` flag is false.
-
-Example:
-
-``` http
-GET /api/utxos
-```
-
-Typical item:
+Returns the 100 most recently created UTXOs: indexed outputs that are
+unspent and not provably unspendable.
 
 ``` json
 {
   "txid": "...",
   "vout": 0,
   "value": 1250000000,
-  "script_pubkey": "OP_0 OP_PUSHBYTES_20 ..."
+  "script_pubkey": "OP_0 OP_PUSHBYTES_20 ...",
+  "script_type": "p2wpkh",
+  "is_coinbase": true,
+  "block_height": 337,
+  "confirmations": 14,
+  "mature": false
 }
 ```
 
 All `value` fields are in **satoshis**.
+
+UTXO semantics:
+
+- **Provably unspendable** outputs are never UTXOs. This follows Bitcoin
+  Core's rule: the script starts with `OP_RETURN` (0x6a) or is longer
+  than 10,000 bytes. They are still stored and returned by
+  `/api/transactions/{txid}`.
+- **`script_type`** is `p2pkh`, `p2sh`, `p2wpkh`, `p2wsh`, `p2tr`,
+  `op_return` or `unknown`. `unknown` means "not one of these templates"
+  (P2PK, bare multisig, anchors, future witness versions, nonstandard);
+  it says nothing about whether the output can be spent.
+- **Coinbase maturity:** a coinbase output can only be spent in a block
+  at least 100 blocks above the one that created it, so `mature` is
+  `false` for coinbase outputs with fewer than 100 confirmations
+  (counted against the indexer's tip). Bitcoin Core's wallet is one block
+  more conservative and shows them as immature until 101 confirmations.
+- `mature: true` means no consensus rule stops the output from being spent
+  in the next block. Whether anyone can produce a valid signature is not
+  something an indexer can know.
+
+### GET `/api/utxos/summary`
+
+Classifies every indexed output:
+
+``` json
+{
+  "indexed_height": 350,
+  "coinbase_maturity": 100,
+  "outputs":              { "count": 730, "value": 1755000000000 },
+  "provably_unspendable": { "count": 351, "value": 0 },
+  "spent":                { "count": 19,  "value": 95000000000 },
+  "utxos":                { "count": 360, "value": 1660000000000 },
+  "immature_coinbase":    { "count": 100, "value": 500000000000 },
+  "spendable":            { "count": 260, "value": 1160000000000 },
+  "utxos_by_script_type": [ { "script_type": "p2wpkh", "count": 355, "value": 1659000000000 } ]
+}
+```
+
+Always `outputs = provably_unspendable + spent + utxos` and
+`utxos = immature_coinbase + spendable`.
 
 ## 7. Addresses
 
@@ -214,14 +254,16 @@ Example response:
   "received": 1250000000,
   "spent": 0,
   "balance": 1250000000,
+  "immature_balance": 1250000000,
+  "spendable_balance": 0,
   "transaction_count": 1
 }
 ```
 
 `received`, `spent`, and `balance` are satoshi amounts derived from
-indexed outputs. `balance` means the sum of indexed outputs currently
-marked unspent; it is not a wallet-spendability or coinbase-maturity
-calculation.
+indexed outputs. `balance` is the sum of the address's UTXOs and always
+equals `immature_balance + spendable_balance`, where `immature_balance`
+is coinbase outputs with fewer than 100 confirmations (see `/api/utxos`).
 
 ### GET `/api/addresses/{address}/utxos`
 
@@ -551,14 +593,22 @@ export interface AddressSummary {
   received: number;
   spent: number;
   balance: number;
+  immature_balance: number;
+  spendable_balance: number;
   transaction_count: number;
 }
 
+/** Same shape for /api/utxos and /api/addresses/{address}/utxos. */
 export interface AddressUtxo {
   txid: string;
   vout: number;
   value: number;
   script_pubkey: string;
+  script_type: "p2pkh" | "p2sh" | "p2wpkh" | "p2wsh" | "p2tr" | "op_return" | "unknown";
+  is_coinbase: boolean;
+  block_height: number;
+  confirmations: number;
+  mature: boolean;
 }
 
 export interface AddressTransaction {

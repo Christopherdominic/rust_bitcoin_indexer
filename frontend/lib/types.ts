@@ -86,18 +86,49 @@ export interface TransactionDetail {
   outputs: TransactionOutput[];
 }
 
+export type ScriptType = "p2pkh" | "p2sh" | "p2wpkh" | "p2wsh" | "p2tr" | "op_return" | "unknown";
+
 export interface Utxo {
   txid: string;
   vout: number;
   value: number;
   script_pubkey: string;
+  /** "unknown" = not a recognised template; says nothing about spendability */
+  script_type: ScriptType;
+  is_coinbase: boolean;
+  block_height: number;
+  /** counted against the indexer's tip */
+  confirmations: number;
+  /** false only for coinbase outputs with < 100 confirmations */
+  mature: boolean;
+}
+
+export interface OutputTotals {
+  count: number;
+  value: number;
+}
+
+/** outputs = provably_unspendable + spent + utxos; utxos = immature_coinbase + spendable */
+export interface UtxoSummary {
+  indexed_height: number | null;
+  coinbase_maturity: number;
+  outputs: OutputTotals;
+  provably_unspendable: OutputTotals;
+  spent: OutputTotals;
+  utxos: OutputTotals;
+  immature_coinbase: OutputTotals;
+  spendable: OutputTotals;
+  utxos_by_script_type: ({ script_type: ScriptType } & OutputTotals)[];
 }
 
 export interface AddressSummary {
   address: string;
   received: number;
   spent: number;
+  /** immature_balance + spendable_balance */
   balance: number;
+  immature_balance: number;
+  spendable_balance: number;
   transaction_count: number;
 }
 

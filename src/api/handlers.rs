@@ -106,7 +106,7 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
             (SELECT COUNT(*) FROM outputs) AS outputs,
             (SELECT COUNT(*) FROM outputs
              WHERE spent = FALSE
-               AND script_pubkey NOT LIKE 'OP_RETURN%') AS unspent_outputs,
+               AND provably_unspendable = FALSE) AS unspent_outputs,
             (SELECT COUNT(*) FROM mempool_transactions m
              WHERE NOT EXISTS (
                  SELECT 1 FROM transactions t WHERE t.txid = m.txid
@@ -474,39 +474,207 @@ pub async fn get_transaction(
 // UTXOS
 // ============================================================
 
+/// Outputs of a coinbase transaction can be spent only in a block at least
+/// this many blocks above the one that created them (consensus rule).
+pub const COINBASE_MATURITY: i64 = 100;
+
 #[derive(Serialize, sqlx::FromRow)]
 pub struct UtxoResponse {
     txid: String,
     vout: i32,
     value: i64,
     script_pubkey: String,
+    /// p2pkh, p2sh, p2wpkh, p2wsh, p2tr or unknown.
+    script_type: String,
+    is_coinbase: bool,
+    block_height: i64,
+    /// Counted against the indexer's tip.
+    confirmations: i64,
+    /// `false` only for a coinbase output with fewer than
+    /// [`COINBASE_MATURITY`] confirmations: no consensus rule stops it being
+    /// spent in the next block. Whether anyone holds the keys is unknowable.
+    mature: bool,
+}
+
+/// Columns shared by every UTXO listing. `$1` is [`COINBASE_MATURITY`].
+macro_rules! utxo_select {
+    ($where:literal) => {
+        concat!(
+            r#"
+            SELECT
+                t.txid,
+                o.vout,
+                o.value,
+                o.script_pubkey,
+                o.script_type,
+                t.is_coinbase,
+                b.height AS block_height,
+                tip.height - b.height + 1 AS confirmations,
+                (NOT t.is_coinbase OR tip.height - b.height + 1 >= $1) AS mature
+            FROM outputs o
+            JOIN transactions t
+                ON t.id = o.transaction_id
+            JOIN blocks b
+                ON b.id = t.block_id
+            CROSS JOIN (SELECT MAX(height) AS height FROM blocks) tip
+            WHERE o.spent = FALSE
+              AND o.provably_unspendable = FALSE
+            "#,
+            $where
+        )
+    };
 }
 
 pub async fn get_utxos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UtxoResponse>>, StatusCode> {
-    let utxos = sqlx::query_as::<_, UtxoResponse>(
+    let utxos = sqlx::query_as::<_, UtxoResponse>(utxo_select!(
         r#"
-        SELECT
-            t.txid,
-            o.vout,
-            o.value,
-            o.script_pubkey
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        WHERE o.spent = FALSE
-          AND o.script_pubkey NOT LIKE 'OP_RETURN%'
         ORDER BY o.id DESC
         LIMIT 100
-        "#,
-    )
+        "#
+    ))
+    .bind(COINBASE_MATURITY)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(utxos))
 }
+
+// ============================================================
+// UTXO SUMMARY
+// GET /api/utxos/summary
+// ============================================================
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputTotals {
+    count: i64,
+    value: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ScriptTypeTotals {
+    script_type: String,
+    count: i64,
+    value: i64,
+}
+
+/// How every indexed output is classified:
+///
+/// `outputs = provably_unspendable + spent + utxos` and
+/// `utxos = immature_coinbase + spendable`.
+#[derive(Serialize)]
+pub struct UtxoSummaryResponse {
+    indexed_height: Option<i64>,
+    coinbase_maturity: i64,
+    outputs: OutputTotals,
+    provably_unspendable: OutputTotals,
+    spent: OutputTotals,
+    utxos: OutputTotals,
+    immature_coinbase: OutputTotals,
+    spendable: OutputTotals,
+    utxos_by_script_type: Vec<ScriptTypeTotals>,
+}
+
+#[derive(sqlx::FromRow)]
+struct SummaryRow {
+    indexed_height: Option<i64>,
+    outputs: i64,
+    outputs_value: i64,
+    unspendable: i64,
+    unspendable_value: i64,
+    spent: i64,
+    spent_value: i64,
+    utxos: i64,
+    utxos_value: i64,
+    immature: i64,
+    immature_value: i64,
+}
+
+pub async fn get_utxo_summary(
+    State(state): State<AppState>,
+) -> Result<Json<UtxoSummaryResponse>, StatusCode> {
+    let row = sqlx::query_as::<_, SummaryRow>(
+        r#"
+        WITH tip AS (
+            SELECT MAX(height) AS height FROM blocks
+        ),
+        classified AS (
+            SELECT
+                o.value,
+                o.provably_unspendable,
+                o.spent,
+                (o.spent = FALSE AND o.provably_unspendable = FALSE) AS utxo,
+                (t.is_coinbase AND tip.height - b.height + 1 < $1) AS immature
+            FROM outputs o
+            JOIN transactions t
+                ON t.id = o.transaction_id
+            JOIN blocks b
+                ON b.id = t.block_id
+            CROSS JOIN tip
+        )
+        SELECT
+            (SELECT height FROM tip) AS indexed_height,
+            COUNT(*) AS outputs,
+            COALESCE(SUM(value), 0)::BIGINT AS outputs_value,
+            COUNT(*) FILTER (WHERE provably_unspendable) AS unspendable,
+            COALESCE(SUM(value) FILTER (WHERE provably_unspendable), 0)::BIGINT AS unspendable_value,
+            COUNT(*) FILTER (WHERE spent) AS spent,
+            COALESCE(SUM(value) FILTER (WHERE spent), 0)::BIGINT AS spent_value,
+            COUNT(*) FILTER (WHERE utxo) AS utxos,
+            COALESCE(SUM(value) FILTER (WHERE utxo), 0)::BIGINT AS utxos_value,
+            COUNT(*) FILTER (WHERE utxo AND immature) AS immature,
+            COALESCE(SUM(value) FILTER (WHERE utxo AND immature), 0)::BIGINT AS immature_value
+        FROM classified
+        "#,
+    )
+    .bind(COINBASE_MATURITY)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|error| {
+        eprintln!("Failed to summarise UTXOs: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let utxos_by_script_type = sqlx::query_as::<_, ScriptTypeTotals>(
+        r#"
+        SELECT
+            script_type,
+            COUNT(*) AS count,
+            COALESCE(SUM(value), 0)::BIGINT AS value
+        FROM outputs
+        WHERE spent = FALSE
+          AND provably_unspendable = FALSE
+        GROUP BY script_type
+        ORDER BY count DESC, script_type
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|error| {
+        eprintln!("Failed to group UTXOs by script type: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let totals = |count, value| OutputTotals { count, value };
+
+    Ok(Json(UtxoSummaryResponse {
+        indexed_height: row.indexed_height,
+        coinbase_maturity: COINBASE_MATURITY,
+        outputs: totals(row.outputs, row.outputs_value),
+        provably_unspendable: totals(row.unspendable, row.unspendable_value),
+        spent: totals(row.spent, row.spent_value),
+        utxos: totals(row.utxos, row.utxos_value),
+        immature_coinbase: totals(row.immature, row.immature_value),
+        spendable: totals(
+            row.utxos - row.immature,
+            row.utxos_value - row.immature_value,
+        ),
+        utxos_by_script_type,
+    }))
+}
+
 // ============================================================
 // ADDRESS
 // ============================================================
@@ -516,16 +684,12 @@ pub struct AddressResponse {
     address: String,
     received: i64,
     spent: i64,
+    /// All unspent outputs: `immature_balance + spendable_balance`.
     balance: i64,
+    /// Coinbase outputs still short of [`COINBASE_MATURITY`] confirmations.
+    immature_balance: i64,
+    spendable_balance: i64,
     transaction_count: i64,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct AddressUtxoResponse {
-    txid: String,
-    vout: i32,
-    value: i64,
-    script_pubkey: String,
 }
 
 /// One transaction's effect on an address's balance.
@@ -691,15 +855,26 @@ pub async fn get_address(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let balance: i64 = sqlx::query_scalar(
+    let (balance, immature_balance): (i64, i64) = sqlx::query_as(
         r#"
-        SELECT COALESCE(SUM(value), 0)::BIGINT
-        FROM outputs
-        WHERE address = $1
-          AND spent = FALSE
+        SELECT
+            COALESCE(SUM(o.value), 0)::BIGINT,
+            COALESCE(SUM(o.value) FILTER (
+                WHERE t.is_coinbase
+                  AND (SELECT MAX(height) FROM blocks) - b.height + 1 < $2
+            ), 0)::BIGINT
+        FROM outputs o
+        JOIN transactions t
+            ON t.id = o.transaction_id
+        JOIN blocks b
+            ON b.id = t.block_id
+        WHERE o.address = $1
+          AND o.spent = FALSE
+          AND o.provably_unspendable = FALSE
         "#,
     )
     .bind(&address)
+    .bind(COINBASE_MATURITY)
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
@@ -722,6 +897,8 @@ pub async fn get_address(
         received,
         spent,
         balance,
+        immature_balance,
+        spendable_balance: balance - immature_balance,
         transaction_count,
     }))
 }
@@ -734,23 +911,14 @@ pub async fn get_address(
 pub async fn get_address_utxos(
     State(state): State<AppState>,
     Path(address): Path<String>,
-) -> Result<Json<Vec<AddressUtxoResponse>>, StatusCode> {
-    let utxos = sqlx::query_as::<_, AddressUtxoResponse>(
+) -> Result<Json<Vec<UtxoResponse>>, StatusCode> {
+    let utxos = sqlx::query_as::<_, UtxoResponse>(utxo_select!(
         r#"
-        SELECT
-            t.txid,
-            o.vout,
-            o.value,
-            o.script_pubkey
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        WHERE o.address = $1
-          AND o.spent = FALSE
-          AND o.script_pubkey NOT LIKE 'OP_RETURN%'
+          AND o.address = $2
         ORDER BY o.id DESC
-        "#,
-    )
+        "#
+    ))
+    .bind(COINBASE_MATURITY)
     .bind(&address)
     .fetch_all(&state.pool)
     .await

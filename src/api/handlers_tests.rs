@@ -450,3 +450,262 @@ async fn status_json_exposes_recorded_zmq_state() {
 
     db.cleanup().await;
 }
+
+// ------------------------------------------------------------
+// UTXO SEMANTICS
+// ------------------------------------------------------------
+
+/// One output of every kind the classifier distinguishes, plus edge cases.
+fn assorted_scripts() -> Vec<ScriptBuf> {
+    use bitcoin::hashes::Hash;
+    vec![
+        ScriptBuf::new_p2pkh(&bitcoin::PubkeyHash::from_byte_array([1; 20])),
+        ScriptBuf::new_p2sh(&bitcoin::ScriptHash::from_byte_array([2; 20])),
+        p2wpkh(3),
+        ScriptBuf::new_p2wsh(&bitcoin::WScriptHash::from_byte_array([4; 32])),
+        ScriptBuf::from_bytes([vec![0x51, 0x20], vec![5; 32]].concat()), // p2tr
+        ScriptBuf::from_bytes(vec![0x6a, 0x02, 0xbe, 0xef]),             // OP_RETURN data
+        ScriptBuf::from_bytes(vec![0x6a]),                               // bare OP_RETURN
+        ScriptBuf::from_bytes([vec![0x21], vec![2; 33], vec![0xac]].concat()), // p2pk
+        ScriptBuf::from_bytes(vec![0x51, 0x02, 0x4e, 0x73]),             // pay-to-anchor
+        ScriptBuf::from_bytes(vec![0xbb, 0x51]),                         // prints as OP_RETURN_187
+        ScriptBuf::from_bytes(vec![0x7e]),                               // OP_CAT
+        ScriptBuf::new(),
+    ]
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn sql_backfill_classifier_agrees_with_the_indexer() {
+    let db = TestDb::new().await;
+
+    let payment = tx(
+        &[OutPoint::new(coinbase(1, 'a').compute_txid(), 0)],
+        assorted_scripts()
+            .into_iter()
+            .map(|s| out(1_000, s))
+            .collect(),
+    );
+    let mut blocks = build_chain(&[], 2, 'a');
+    push_block(&mut blocks, 'a', vec![payment]);
+    sync_chain(&MockChain::new(blocks), &db.pool).await.unwrap();
+
+    // Migration 007 backfills existing rows with classify_script_pubkey().
+    let rows: Vec<(String, String, String, bool)> = sqlx::query_as(
+        r#"
+        SELECT script_pubkey, script_type,
+               classify_script_pubkey(script_pubkey),
+               provably_unspendable
+        FROM outputs
+        "#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+
+    assert!(rows.len() > assorted_scripts().len());
+    for (asm, indexed, backfilled, unspendable) in rows {
+        assert_eq!(indexed, backfilled, "script_type for {asm:?}");
+        assert_eq!(
+            unspendable,
+            backfilled == "op_return",
+            "provably_unspendable for {asm:?}"
+        );
+    }
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn only_op_return_outputs_are_left_out_of_the_utxo_set() {
+    let db = TestDb::new().await;
+    let state = AppState::new(db.pool.clone());
+
+    let payment = tx(
+        &[OutPoint::new(coinbase(1, 'a').compute_txid(), 0)],
+        assorted_scripts()
+            .into_iter()
+            .map(|s| out(1_000, s))
+            .collect(),
+    );
+    let txid = payment.compute_txid().to_string();
+    let mut blocks = build_chain(&[], 2, 'a');
+    push_block(&mut blocks, 'a', vec![payment]);
+    sync_chain(&MockChain::new(blocks), &db.pool).await.unwrap();
+
+    let utxos = get_utxos(State(state.clone())).await.unwrap().0;
+    let listed: Vec<i32> = utxos
+        .iter()
+        .filter(|u| u.txid == txid)
+        .map(|u| u.vout)
+        .collect();
+
+    // vouts 5 and 6 are OP_RETURN. 9 (0xbb, printed "OP_RETURN_187") used to
+    // be dropped by the old `NOT LIKE 'OP_RETURN%'` filter.
+    let expected: Vec<i32> = (0..12).filter(|v| *v != 5 && *v != 6).rev().collect();
+    assert_eq!(listed, expected);
+    let undefined_opcode = utxos
+        .iter()
+        .find(|u| u.txid == txid && u.vout == 9)
+        .unwrap();
+    assert_eq!(undefined_opcode.script_type, "unknown");
+
+    let s = status(State(state)).await.unwrap().0;
+    assert_eq!(s.unspent_outputs, utxos.len() as i64);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn coinbase_outputs_mature_after_100_confirmations() {
+    let db = TestDb::new().await;
+    let state = AppState::new(db.pool.clone());
+    let miner = address_of(&p2wpkh(1)); // every test coinbase pays here
+    let reward = 50_0000_0000;
+
+    // Heights 0..=99: genesis has 100 confirmations, height 1 has 99.
+    let mut blocks = build_chain(&[], 100, 'a');
+    sync_chain(&MockChain::new(blocks.clone()), &db.pool)
+        .await
+        .unwrap();
+
+    let summary = get_utxo_summary(State(state.clone())).await.unwrap().0;
+    assert_eq!(summary.coinbase_maturity, 100);
+    assert_eq!(summary.utxos.count, 100);
+    assert_eq!(summary.immature_coinbase.count, 99);
+    assert_eq!(summary.spendable.count, 1);
+
+    let utxos = get_address_utxos(State(state.clone()), Path(miner.clone()))
+        .await
+        .unwrap()
+        .0;
+    let at = |h: i64| utxos.iter().find(|u| u.block_height == h).unwrap();
+    assert_eq!((at(0).confirmations, at(0).mature), (100, true));
+    assert_eq!((at(1).confirmations, at(1).mature), (99, false));
+    assert!(at(1).is_coinbase);
+
+    let address = get_address(State(state.clone()), Path(miner.clone()))
+        .await
+        .unwrap()
+        .0;
+    assert_eq!(address.balance, 100 * reward);
+    assert_eq!(address.immature_balance, 99 * reward);
+    assert_eq!(address.spendable_balance, reward);
+
+    // One more block: height 1 reaches 100 confirmations.
+    blocks = build_chain(&blocks, 1, 'a');
+    sync_chain(&MockChain::new(blocks), &db.pool).await.unwrap();
+
+    let summary = get_utxo_summary(State(state)).await.unwrap().0;
+    assert_eq!(summary.immature_coinbase.count, 99); // heights 2..=100
+    assert_eq!(summary.spendable.count, 2); // heights 0 and 1
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn utxo_summary_categories_add_up() {
+    let db = TestDb::new().await;
+    let state = AppState::new(db.pool.clone());
+
+    // A non-coinbase payment spending block 1's coinbase into a mix of
+    // outputs, one of which is spent again later.
+    let payment = tx(
+        &[OutPoint::new(coinbase(1, 'a').compute_txid(), 0)],
+        assorted_scripts()
+            .into_iter()
+            .map(|s| out(1_000, s))
+            .collect(),
+    );
+    let respend = tx(
+        &[OutPoint::new(payment.compute_txid(), 2)],
+        vec![out(900, p2wpkh(9))],
+    );
+    let mut blocks = build_chain(&[], 2, 'a');
+    push_block(&mut blocks, 'a', vec![payment]);
+    push_block(&mut blocks, 'a', vec![respend]);
+    sync_chain(&MockChain::new(blocks), &db.pool).await.unwrap();
+
+    let s = get_utxo_summary(State(state)).await.unwrap().0;
+
+    let sum = |a: OutputTotals, b: OutputTotals| OutputTotals {
+        count: a.count + b.count,
+        value: a.value + b.value,
+    };
+    assert_eq!(
+        s.outputs,
+        sum(sum(s.provably_unspendable, s.spent), s.utxos),
+        "outputs = unspendable + spent + utxos"
+    );
+    assert_eq!(s.utxos, sum(s.immature_coinbase, s.spendable));
+    assert_eq!(s.provably_unspendable.count, 2);
+    assert_eq!(s.spent.count, 2); // block 1's coinbase and payment:2
+    assert_eq!(
+        s.utxos_by_script_type.iter().map(|t| t.count).sum::<i64>(),
+        s.utxos.count
+    );
+    // Only non-coinbase outputs are spendable at this low height.
+    assert_eq!(s.spendable.count, 10);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn migration_007_backfills_previously_indexed_outputs() {
+    let db = TestDb::migrated_until("007").await;
+
+    // Rows as the indexer stored them before 007: no script semantics.
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO blocks (height, hash, previous_hash, timestamp, tx_count)
+        VALUES (0, 'h0', 'none', 0, 1);
+        INSERT INTO transactions (txid, block_id, position, version, lock_time, is_coinbase)
+        SELECT 't0', id, 0, 2, 0, TRUE FROM blocks;
+        "#,
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let scripts = assorted_scripts();
+    for (vout, script) in scripts.iter().enumerate() {
+        sqlx::query(
+            r#"
+            INSERT INTO outputs (transaction_id, vout, value, script_pubkey)
+            SELECT id, $1, 1000, $2 FROM transactions
+            "#,
+        )
+        .bind(vout as i32)
+        .bind(script.to_string())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    db.apply_migration("007_output_script_semantics.sql").await;
+
+    let rows: Vec<(i32, String, bool)> =
+        sqlx::query_as("SELECT vout, script_type, provably_unspendable FROM outputs ORDER BY vout")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+
+    for ((vout, script_type, unspendable), script) in rows.iter().zip(&scripts) {
+        assert_eq!(
+            script_type.as_str(),
+            crate::db::outputs::script_type(script),
+            "vout {vout}: {script}"
+        );
+        assert_eq!(
+            *unspendable,
+            crate::db::outputs::is_provably_unspendable(script),
+            "vout {vout}: {script}"
+        );
+    }
+    assert_eq!(rows.len(), scripts.len());
+
+    db.cleanup().await;
+}

@@ -1,8 +1,8 @@
 use crate::api::{
     handlers::{
         get_address, get_address_transactions, get_address_utxos, get_block, get_block_by_hash,
-        get_blocks, get_transaction, get_utxos, get_watch_activity, get_watched_addresses, health,
-        search, status, unwatch_address, watch_address,
+        get_blocks, get_transaction, get_utxo_summary, get_utxos, get_watch_activity,
+        get_watched_addresses, health, search, status, unwatch_address, watch_address,
     },
     mempool::{get_mempool, get_mempool_transaction, get_transaction_status},
     state::AppState,
@@ -28,6 +28,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mempool", get(get_mempool))
         .route("/api/mempool/{txid}", get(get_mempool_transaction))
         .route("/api/utxos", get(get_utxos))
+        .route("/api/utxos/summary", get(get_utxo_summary))
         .route("/api/addresses/{address}", get(get_address))
         .route("/api/addresses/{address}/utxos", get(get_address_utxos))
         .route(

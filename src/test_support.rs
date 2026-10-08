@@ -260,6 +260,12 @@ pub struct TestDb {
 impl TestDb {
     /// Connects using `TEST_DATABASE_URL` only — never `DATABASE_URL`.
     pub async fn new() -> Self {
+        Self::migrated_until("~").await
+    }
+
+    /// Like [`TestDb::new`], but only applies migrations whose file name
+    /// sorts before `stop` (e.g. `"007"` stops after 006).
+    pub async fn migrated_until(stop: &str) -> Self {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("TEST_DATABASE_URL must be set to run database tests");
 
@@ -299,6 +305,7 @@ impl TestDb {
             .expect("read src/migrations")
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+            .filter(|path| path.file_name().unwrap().to_string_lossy().as_ref() < stop)
             .collect();
         migrations.sort();
 
@@ -315,6 +322,15 @@ impl TestDb {
             admin,
             schema,
         }
+    }
+
+    /// Applies one migration file to this schema.
+    pub async fn apply_migration(&self, file: &str) {
+        let sql = std::fs::read_to_string(format!("src/migrations/{file}")).unwrap();
+        sqlx::raw_sql(AssertSqlSafe(sql))
+            .execute(&self.pool)
+            .await
+            .unwrap_or_else(|e| panic!("migration {file}: {e}"));
     }
 
     pub async fn cleanup(self) {
