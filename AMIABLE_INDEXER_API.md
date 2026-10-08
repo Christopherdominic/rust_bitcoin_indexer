@@ -57,8 +57,8 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:3000
 
   GET                     `/api/addresses/{address}/utxos`          Address UTXOs
 
-  GET                     `/api/addresses/{address}/transactions`   Indexed receiving
-                                                                    activity for address
+  GET                     `/api/addresses/{address}/transactions`   Received and spent
+                                                                    history for address
 
   GET                     `/api/search/{query}`                     Universal explorer
                                                                     search
@@ -231,23 +231,58 @@ Example response:
 
 ### GET `/api/addresses/{address}/transactions`
 
-Example response:
+Returns every confirmed transaction that pays to **or spends from** the
+address, newest first, **one row per transaction**.
+
+Example response (a receive, then a spend with change back):
 
 ``` json
 [
   {
+    "txid": "5f1c…",
+    "block_height": 345,
+    "timestamp": 1790899950,
+    "position": 1,
+    "direction": "sent",
+    "received": 60000000,
+    "sent": 100000000,
+    "net": -40000000,
+    "value": 40000000,
+    "spent": false
+  },
+  {
     "txid": "bfff47f13f277b51ab598520377d580129f884c4dd5f0586234df0c6a2efe721",
     "block_height": 337,
     "timestamp": 1790896950,
-    "value": 1250000000,
-    "spent": false
+    "position": 1,
+    "direction": "received",
+    "received": 100000000,
+    "sent": 0,
+    "net": 100000000,
+    "value": 100000000,
+    "spent": true
   }
 ]
 ```
 
-Current limitation: this endpoint represents transactions that created
-indexed outputs for the address. It is not yet a complete
-incoming-and-outgoing address history.
+Field meanings (all amounts in satoshis):
+
+  Field         Meaning
+  ------------- ------------------------------------------------------------
+  `received`    Sum of this transaction's outputs paying to the address
+  `sent`        Sum of the address's earlier outputs this transaction's inputs consume
+  `net`         `received - sent`: the change in the address's balance
+  `direction`   `"received"` if `net > 0`, `"sent"` if `net < 0`, `"self"` if `net = 0`
+  `value`       `abs(net)`
+  `spent`       `true` when every output this transaction paid to the address has since been spent; `false` if it paid nothing to the address
+
+Change outputs are netted, not double counted: spending a 1 BTC output
+and receiving 0.6 BTC change in the same transaction is one row with
+`sent = 100000000`, `received = 60000000`, `net = -40000000`.
+
+Summed over the history, `received` and `sent` equal the address
+summary's `received` and `spent`, and the number of rows equals its
+`transaction_count`.
 
 ## 8. Universal Search
 
@@ -351,6 +386,9 @@ Example response:
 }
 ```
 
+`transaction_count` and `latest_*` include both receiving and spending
+transactions, matching `/api/addresses/{address}/transactions`.
+
 This is a polling API, not a push-notification API. The underlying
 indexer updates as new blocks are processed, so polling this endpoint
 will reflect newly indexed activity.
@@ -428,6 +466,11 @@ export interface AddressTransaction {
   txid: string;
   block_height: number;
   timestamp: number;
+  position: number;
+  direction: "received" | "sent" | "self";
+  received: number;
+  sent: number;
+  net: number;
   value: number;
   spent: boolean;
 }

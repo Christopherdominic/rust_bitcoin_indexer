@@ -75,12 +75,27 @@ export interface AddressSummary {
   transaction_count: number;
 }
 
-/** One indexed output paying to the address, with the block that created it. */
-export interface AddressOutput {
+export type AddressDirection = "received" | "sent" | "self";
+
+/**
+ * One confirmed transaction's effect on an address's balance. A spend that
+ * sends change back to the address is a single row with both sides netted.
+ */
+export interface AddressTransaction {
   txid: string;
   block_height: number;
   timestamp: number;
+  position: number;
+  direction: AddressDirection;
+  /** sats paid to the address by this transaction's outputs */
+  received: number;
+  /** sats of the address's earlier outputs consumed by this transaction's inputs */
+  sent: number;
+  /** received − sent */
+  net: number;
+  /** |net| */
   value: number;
+  /** every output this transaction paid to the address has been spent */
   spent: boolean;
 }
 

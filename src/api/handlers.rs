@@ -441,13 +441,122 @@ pub struct AddressUtxoResponse {
     script_pubkey: String,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+/// One transaction's effect on an address's balance.
+///
+/// A transaction that both spends the address's coins and pays change back
+/// to it is one row: `sent` and `received` are netted, never listed twice.
+#[derive(Serialize)]
 pub struct AddressTransactionResponse {
     txid: String,
     block_height: i64,
     timestamp: i64,
+    position: i32,
+    /// "received" (net > 0), "sent" (net < 0) or "self" (net = 0).
+    direction: &'static str,
+    /// Sats paid to the address by this transaction's outputs.
+    received: i64,
+    /// Sats of the address's earlier outputs consumed by this transaction's inputs.
+    sent: i64,
+    /// `received - sent`: the change in the address's balance.
+    net: i64,
+    /// `|net|`. For a plain receive this is the received amount, as before.
     value: i64,
+    /// Every output this transaction paid to the address has been spent.
+    /// `false` when it paid nothing to the address.
     spent: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct AddressActivityRow {
+    txid: String,
+    block_height: i64,
+    timestamp: i64,
+    position: i32,
+    received: i64,
+    sent: i64,
+    spent: bool,
+}
+
+impl From<AddressActivityRow> for AddressTransactionResponse {
+    fn from(row: AddressActivityRow) -> Self {
+        let net = row.received - row.sent;
+        let direction = match net.signum() {
+            1 => "received",
+            -1 => "sent",
+            _ => "self",
+        };
+
+        Self {
+            txid: row.txid,
+            block_height: row.block_height,
+            timestamp: row.timestamp,
+            position: row.position,
+            direction,
+            received: row.received,
+            sent: row.sent,
+            net,
+            value: net.abs(),
+            spent: row.spent,
+        }
+    }
+}
+
+/// Every confirmed transaction that pays to or spends from `address`,
+/// newest first, one row per transaction.
+async fn address_history(
+    state: &AppState,
+    address: &str,
+) -> Result<Vec<AddressTransactionResponse>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, AddressActivityRow>(
+        r#"
+        WITH activity AS (
+            -- Outputs paying to the address.
+            SELECT
+                o.transaction_id,
+                o.value AS received,
+                0::BIGINT AS sent,
+                o.spent AS output_spent
+            FROM outputs o
+            WHERE o.address = $1
+
+            UNION ALL
+
+            -- Inputs spending one of the address's outputs.
+            SELECT
+                i.transaction_id,
+                0::BIGINT AS received,
+                o.value AS sent,
+                NULL AS output_spent
+            FROM outputs o
+            JOIN transactions ot
+                ON ot.id = o.transaction_id
+            JOIN inputs i
+                ON i.prev_txid = ot.txid
+               AND i.prev_vout = o.vout
+            WHERE o.address = $1
+        )
+        SELECT
+            t.txid,
+            b.height AS block_height,
+            b.timestamp,
+            t.position,
+            SUM(a.received)::BIGINT AS received,
+            SUM(a.sent)::BIGINT AS sent,
+            COALESCE(BOOL_AND(a.output_spent), FALSE) AS spent
+        FROM activity a
+        JOIN transactions t
+            ON t.id = a.transaction_id
+        JOIN blocks b
+            ON b.id = t.block_id
+        GROUP BY t.id, t.txid, b.height, b.timestamp, t.position
+        ORDER BY b.height DESC, t.position DESC
+        "#,
+    )
+    .bind(address)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
 }
 
 // ============================================================
@@ -513,22 +622,13 @@ pub async fn get_address(
 
     let spent = received - balance;
 
-    let transaction_count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(DISTINCT t.txid)
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        WHERE o.address = $1
-        "#,
-    )
-    .bind(&address)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| {
-        eprintln!("Failed to count address transactions: {}", error);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let transaction_count = address_history(&state, &address)
+        .await
+        .map_err(|error| {
+            eprintln!("Failed to count address transactions: {}", error);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .len() as i64;
 
     Ok(Json(AddressResponse {
         address,
@@ -584,27 +684,7 @@ pub async fn get_address_transactions(
     State(state): State<AppState>,
     Path(address): Path<String>,
 ) -> Result<Json<Vec<AddressTransactionResponse>>, StatusCode> {
-    let transactions = sqlx::query_as::<_, AddressTransactionResponse>(
-        r#"
-        SELECT
-            t.txid,
-            b.height AS block_height,
-            b.timestamp,
-            o.value,
-            o.spent
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        JOIN blocks b
-            ON b.id = t.block_id
-        WHERE o.address = $1
-        ORDER BY b.height DESC, t.position DESC
-        "#,
-    )
-    .bind(&address)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|error| {
+    let transactions = address_history(&state, &address).await.map_err(|error| {
         eprintln!(
             "Failed to fetch transactions for address {}: {}",
             address, error
@@ -892,48 +972,15 @@ pub async fn get_watch_activity(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let transaction_count: i64 = sqlx::query_scalar(
-        r#"
-        SELECT COUNT(DISTINCT t.txid)
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        WHERE o.address = $1
-        "#,
-    )
-    .bind(&address)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|error| {
-        eprintln!("Failed to count watched transactions: {}", error);
+    let history = address_history(&state, &address).await.map_err(|error| {
+        eprintln!("Failed to fetch watched address activity: {}", error);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let latest: Option<(String, i64)> = sqlx::query_as(
-        r#"
-        SELECT
-            t.txid,
-            b.height
-        FROM outputs o
-        JOIN transactions t
-            ON t.id = o.transaction_id
-        JOIN blocks b
-            ON b.id = t.block_id
-        WHERE o.address = $1
-        ORDER BY b.height DESC, t.position DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(&address)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|error| {
-        eprintln!("Failed to fetch latest watched activity: {}", error);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let transaction_count = history.len() as i64;
 
-    let (latest_txid, latest_block_height) = match latest {
-        Some((txid, height)) => (Some(txid), Some(height)),
+    let (latest_txid, latest_block_height) = match history.into_iter().next() {
+        Some(latest) => (Some(latest.txid), Some(latest.block_height)),
         None => (None, None),
     };
 

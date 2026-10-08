@@ -1,5 +1,5 @@
 import type {
-  AddressOutput,
+  AddressTransaction,
   AddressSummary,
   BlockDetail,
   BlockSummary,
@@ -107,7 +107,7 @@ export const getAddressUtxos = (address: string) =>
   api<Utxo[]>(`/api/addresses/${seg(address)}/utxos`, isArray);
 
 export const getAddressTransactions = (address: string) =>
-  api<AddressOutput[]>(`/api/addresses/${seg(address)}/transactions`, isArray);
+  api<AddressTransaction[]>(`/api/addresses/${seg(address)}/transactions`, isArray);
 
 // ---------------------------------------------------------------- search
 

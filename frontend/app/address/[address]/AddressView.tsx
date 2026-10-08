@@ -5,18 +5,18 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { HashDisplay } from "@/components/HashDisplay";
 import { Skeleton, TableSkeleton } from "@/components/LoadingState";
-import { PageHeader, Panel, Sats, SpendTag, Tag } from "@/components/ui";
+import { PageHeader, Panel, Sats, Tag } from "@/components/ui";
 import { UtxoTable } from "@/components/UtxoTable";
 import { WatchButton } from "@/components/WatchButton";
 import { getAddress, getAddressTransactions, getAddressUtxos } from "@/lib/api";
 import { formatBTC, formatNumber, formatRelative, formatSats, formatTimestamp, percent, truncateHash } from "@/lib/format";
-import type { AddressOutput, AddressSummary } from "@/lib/types";
+import type { AddressDirection, AddressSummary, AddressTransaction } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 
 export function AddressView({ address }: { address: string }) {
   const summary = useApi(`addr:${address}`, () => getAddress(address));
   const utxos = useApi(`addr-utxos:${address}`, () => getAddressUtxos(address));
-  const outputs = useApi(`addr-txs:${address}`, () => getAddressTransactions(address));
+  const history = useApi(`addr-txs:${address}`, () => getAddressTransactions(address));
 
   if (summary.error) {
     return (
@@ -55,8 +55,8 @@ export function AddressView({ address }: { address: string }) {
         />
       </Panel>
 
-      <Panel title="Received outputs" meta="Transactions that created indexed outputs paying to this address">
-        <ReceivedTable rows={outputs.data} loading={outputs.loading} error={outputs.error} onRetry={outputs.reload} />
+      <Panel title="Transactions" meta="Confirmed transactions paying to or spending from this address, with their effect on its balance">
+        <HistoryTable rows={history.data} loading={history.loading} error={history.error} onRetry={history.reload} />
       </Panel>
     </div>
   );
@@ -125,20 +125,26 @@ function Figure({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
-function ReceivedTable({
+const directionTone: Record<AddressDirection, "ok" | "bad" | "neutral"> = {
+  received: "ok",
+  sent: "bad",
+  self: "neutral",
+};
+
+function HistoryTable({
   rows,
   loading,
   error,
   onRetry,
 }: {
-  rows: AddressOutput[] | undefined;
+  rows: AddressTransaction[] | undefined;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
 }) {
   if (error) return <ErrorState error={error} onRetry={onRetry} compact />;
   if (!rows) return loading ? <TableSkeleton rows={4} cols={4} /> : null;
-  if (rows.length === 0) return <EmptyState title="No indexed outputs for this address" />;
+  if (rows.length === 0) return <EmptyState title="No indexed transactions for this address" />;
 
   return (
     <div className="overflow-x-auto">
@@ -147,14 +153,14 @@ function ReceivedTable({
           <tr>
             <th>Transaction</th>
             <th className="w-24">Block</th>
-            <th className="text-right">Value</th>
+            <th className="w-24">Direction</th>
+            <th className="text-right">Balance change</th>
             <th className="hidden text-right md:table-cell">Timestamp</th>
-            <th className="w-24 text-right">State</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.txid}-${i}`}>
+          {rows.map((r) => (
+            <tr key={r.txid}>
               <td className="max-w-0 w-full">
                 <HashDisplay value={r.txid} href={`/tx/${r.txid}`} head={10} tail={10} className="text-[13px]" />
               </td>
@@ -163,15 +169,23 @@ function ReceivedTable({
                   {formatNumber(r.block_height)}
                 </Link>
               </td>
-              <td className="text-right">
-                <Sats value={r.value} className="text-[13px]" />
+              <td>
+                <Tag tone={directionTone[r.direction]}>{r.direction}</Tag>
+              </td>
+              <td className="whitespace-nowrap text-right">
+                <span className={`num block text-[13px] ${r.net > 0 ? "text-ok" : r.net < 0 ? "text-bad" : "text-muted"}`}>
+                  {r.net > 0 ? "+" : r.net < 0 ? "−" : ""}
+                  {formatSats(Math.abs(r.net))}
+                </span>
+                {r.received > 0 && r.sent > 0 && (
+                  <span className="num block text-[11px] text-faint">
+                    {formatSats(r.sent, false)} out · {formatSats(r.received, false)} back
+                  </span>
+                )}
               </td>
               <td className="hidden whitespace-nowrap text-right md:table-cell">
                 <span className="num block text-[13px] text-muted">{formatTimestamp(r.timestamp)}</span>
                 <span className="num block text-[11px] text-faint">{formatRelative(r.timestamp)}</span>
-              </td>
-              <td className="text-right">
-                <SpendTag spent={r.spent} />
               </td>
             </tr>
           ))}
