@@ -480,21 +480,51 @@ Simple service-health endpoint.
 
 ### GET `/api/status`
 
-Returns indexer database statistics. Current fields include:
+Reports the indexer's actual state. Every value is either measured during
+the request or recorded by the running indexer; anything that cannot be
+determined right now is `null` instead of guessed.
 
-``` ts
-interface IndexerStatus {
-  indexed_height: number | null;
-  blocks: number;
-  transactions: number;
-  inputs: number;
-  outputs: number;
-  unspent_outputs: number;
+``` json
+{
+  "network": "regtest",
+  "core_height": 350,
+  "indexed_height": 350,
+  "blocks_behind": 0,
+  "synced": true,
+  "bitcoin_core": "connected",
+  "database": "connected",
+  "zmq": {
+    "blocks": { "status": "connected", "last_message_at": 1790900000 },
+    "transactions": { "status": "connected", "last_message_at": 1790900042 }
+  },
+  "mempool_transactions": 2,
+  "blocks": 351,
+  "transactions": 365,
+  "inputs": 370,
+  "outputs": 730,
+  "unspent_outputs": 360
 }
 ```
 
-The endpoint describes indexed database state; it should not be
-interpreted as a direct Bitcoin Core node-status response.
+How each value is determined:
+
+  Field                    Source
+  ------------------------ -----------------------------------------------------------
+  `bitcoin_core`           `getblockchaininfo` is called on every request (3 s timeout)
+  `network`, `core_height` That same call; `null` when Core is unreachable
+  `synced`                 Indexed tip **hash** equals Core's best block hash (a same-height reorg is not synced)
+  `blocks_behind`          `core_height − indexed_height`, never negative
+  `database`               The response itself was built from PostgreSQL; if it is down the endpoint returns 500
+  `zmq.*.status`           ZMQ socket monitor events for that endpoint
+  `zmq.*.last_message_at`  Time the indexer last received a message on that endpoint
+
+`zmq` `"connected"` means the ZMQ session with Bitcoin Core's publisher
+is established. It does not prove Core is publishing on it; use
+`last_message_at` for that. `transactions` is `"not_configured"` when
+`ZMQ_TX_URL` is not set.
+
+The API only starts after the initial historical sync, so the status is
+unavailable while that sync runs.
 
 ## 11. TypeScript Types
 
@@ -563,8 +593,34 @@ export interface WatchActivity {
   latest_block_height: number | null;
 }
 
+export type ServiceState = "connected" | "unreachable";
+
+export type ZmqEndpointState =
+  | "not_started"    // initial sync still running
+  | "connecting"     // subscribed, no session yet
+  | "connected"
+  | "disconnected"   // ZMQ keeps retrying
+  | "not_configured";
+
+export interface ZmqEndpointStatus {
+  status: ZmqEndpointState;
+  /** unix seconds of the last message received on this endpoint */
+  last_message_at: number | null;
+}
+
 export interface IndexerStatus {
+  /** Bitcoin Core's chain, e.g. "regtest"; null if Core is unreachable */
+  network: string | null;
+  core_height: number | null;
   indexed_height: number | null;
+  /** core_height − indexed_height, never negative; null if Core is unreachable */
+  blocks_behind: number | null;
+  /** indexed tip hash equals Core's best block hash; null if Core is unreachable */
+  synced: boolean | null;
+  bitcoin_core: ServiceState;
+  database: ServiceState;
+  zmq: { blocks: ZmqEndpointStatus; transactions: ZmqEndpointStatus };
+  mempool_transactions: number;
   blocks: number;
   transactions: number;
   inputs: number;

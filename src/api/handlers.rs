@@ -3,9 +3,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
-use crate::api::state::AppState;
+use crate::{api::state::AppState, rpc::bitcoin::BlockchainInfo, zmq::status::EndpointSnapshot};
 
 // ============================================================
 // HEALTH
@@ -24,9 +26,43 @@ pub async fn health() -> Json<HealthResponse> {
 // STATUS
 // ============================================================
 
+/// How long the status endpoint waits for Bitcoin Core before reporting
+/// it as unreachable.
+const NODE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceState {
+    Connected,
+    Unreachable,
+}
+
+#[derive(Serialize)]
+pub struct ZmqStatusResponse {
+    blocks: EndpointSnapshot,
+    transactions: EndpointSnapshot,
+}
+
+/// Every field is either measured during this request or recorded by the
+/// running indexer. Values that cannot be determined right now are null
+/// rather than guessed.
 #[derive(Serialize)]
 pub struct StatusResponse {
+    /// Bitcoin Core's chain ("regtest", …); null if Core is unreachable.
+    network: Option<String>,
+    core_height: Option<i64>,
     indexed_height: Option<i64>,
+    /// `core_height - indexed_height`, never negative; null if Core is unreachable.
+    blocks_behind: Option<i64>,
+    /// The indexed tip is Core's best block (same hash, not just same
+    /// height); null if Core is unreachable.
+    synced: Option<bool>,
+    /// Result of asking Core for its tip during this request.
+    bitcoin_core: ServiceState,
+    /// This response was built from the database, so it is reachable.
+    database: ServiceState,
+    zmq: ZmqStatusResponse,
+    mempool_transactions: i64,
     blocks: i64,
     transactions: i64,
     inputs: i64,
@@ -34,46 +70,97 @@ pub struct StatusResponse {
     unspent_outputs: i64,
 }
 
+#[derive(sqlx::FromRow)]
+struct DatabaseCounts {
+    indexed_height: Option<i64>,
+    indexed_hash: Option<String>,
+    blocks: i64,
+    transactions: i64,
+    inputs: i64,
+    outputs: i64,
+    unspent_outputs: i64,
+    mempool_transactions: i64,
+}
+
+/// Asks Core for its tip on a blocking thread, giving up after
+/// [`NODE_TIMEOUT`]. `None` means unreachable (or no client attached).
+async fn node_tip(state: &AppState) -> Option<BlockchainInfo> {
+    let node = state.node.clone()?;
+    let call = tokio::task::spawn_blocking(move || node.blockchain_info());
+
+    match tokio::time::timeout(NODE_TIMEOUT, call).await {
+        Ok(Ok(Ok(info))) => Some(info),
+        _ => None,
+    }
+}
+
 pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, StatusCode> {
-    let indexed_height: Option<i64> = sqlx::query_scalar("SELECT MAX(height) FROM blocks")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let blocks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blocks")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let inputs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inputs")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let outputs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outputs")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let unspent_outputs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM outputs WHERE spent = FALSE AND script_pubkey NOT LIKE 'OP_RETURN%'",
+    let counts = sqlx::query_as::<_, DatabaseCounts>(
+        r#"
+        SELECT
+            (SELECT MAX(height) FROM blocks) AS indexed_height,
+            (SELECT hash FROM blocks ORDER BY height DESC LIMIT 1) AS indexed_hash,
+            (SELECT COUNT(*) FROM blocks) AS blocks,
+            (SELECT COUNT(*) FROM transactions) AS transactions,
+            (SELECT COUNT(*) FROM inputs) AS inputs,
+            (SELECT COUNT(*) FROM outputs) AS outputs,
+            (SELECT COUNT(*) FROM outputs
+             WHERE spent = FALSE
+               AND script_pubkey NOT LIKE 'OP_RETURN%') AS unspent_outputs,
+            (SELECT COUNT(*) FROM mempool_transactions m
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM transactions t WHERE t.txid = m.txid
+             )) AS mempool_transactions
+        "#,
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|error| {
+        eprintln!("Failed to read indexer status: {}", error);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let node = node_tip(&state).await;
+
+    let (network, core_height, blocks_behind, synced) = match &node {
+        Some(info) => {
+            let core_height = info.blocks as i64;
+            let behind = match counts.indexed_height {
+                Some(indexed) => core_height - indexed,
+                None => core_height + 1,
+            };
+            (
+                Some(info.chain.clone()),
+                Some(core_height),
+                Some(behind.max(0)),
+                Some(counts.indexed_hash.as_deref() == Some(info.best_block_hash.as_str())),
+            )
+        }
+        None => (None, None, None, None),
+    };
 
     Ok(Json(StatusResponse {
-        indexed_height,
-        blocks,
-        transactions,
-        inputs,
-        outputs,
-        unspent_outputs,
+        network,
+        core_height,
+        indexed_height: counts.indexed_height,
+        blocks_behind,
+        synced,
+        bitcoin_core: if node.is_some() {
+            ServiceState::Connected
+        } else {
+            ServiceState::Unreachable
+        },
+        database: ServiceState::Connected,
+        zmq: ZmqStatusResponse {
+            blocks: state.zmq.blocks.snapshot(),
+            transactions: state.zmq.transactions.snapshot(),
+        },
+        mempool_transactions: counts.mempool_transactions,
+        blocks: counts.blocks,
+        transactions: counts.transactions,
+        inputs: counts.inputs,
+        outputs: counts.outputs,
+        unspent_outputs: counts.unspent_outputs,
     }))
 }
 

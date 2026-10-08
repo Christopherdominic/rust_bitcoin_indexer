@@ -8,6 +8,8 @@ mod test_support;
 mod ui;
 mod zmq;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use tokio::net::TcpListener;
 
@@ -16,7 +18,7 @@ use config::Config;
 use db::postgres::connect;
 use indexer::sync::sync_chain;
 use rpc::bitcoin::BitcoinRpc;
-use zmq::listener::run_zmq_listener;
+use zmq::{listener::run_zmq_listener, status::ZmqStatus};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,7 +39,8 @@ async fn main() -> Result<()> {
     // BITCOIN RPC
     // --------------------------------------------------------
 
-    let rpc = BitcoinRpc::new(&config)?;
+    // Shared with the API, which asks Core for its tip on each status request.
+    let rpc = Arc::new(BitcoinRpc::new(&config)?);
 
     ui::success("Bitcoin Core RPC ready");
     ui::field("rpc", &config.rpc_url);
@@ -46,7 +49,7 @@ async fn main() -> Result<()> {
     // HISTORICAL CATCH-UP
     // --------------------------------------------------------
 
-    sync_chain(&rpc, &pool).await?;
+    sync_chain(rpc.as_ref(), &pool).await?;
 
     ui::success("Historical synchronization complete");
 
@@ -54,7 +57,11 @@ async fn main() -> Result<()> {
     // API
     // --------------------------------------------------------
 
-    let state = AppState::new(pool.clone());
+    let zmq_status = Arc::new(ZmqStatus::new(config.zmq_tx_url.is_some()));
+
+    let state = AppState::new(pool.clone())
+        .with_node(rpc.clone())
+        .with_zmq(zmq_status.clone());
 
     let app = create_router(state);
 
@@ -79,6 +86,7 @@ async fn main() -> Result<()> {
         config.zmq_tx_url.as_deref(),
         &rpc,
         &pool,
+        &zmq_status,
     );
 
     tokio::try_join!(api_server, zmq_listener)?;

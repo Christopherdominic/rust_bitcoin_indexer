@@ -1,8 +1,34 @@
 // Shapes returned by the Amiable Indexer Axum API (src/api/handlers.rs).
 // All monetary values are integer satoshis.
 
+export type ServiceState = "connected" | "unreachable";
+
+export type ZmqEndpointState =
+  | "not_started"    // initial sync still running
+  | "connecting"     // subscribed, no session yet
+  | "connected"
+  | "disconnected"   // ZMQ keeps retrying
+  | "not_configured";
+
+export interface ZmqEndpointStatus {
+  status: ZmqEndpointState;
+  /** unix seconds of the last message received on this endpoint */
+  last_message_at: number | null;
+}
+
 export interface IndexerStatus {
+  /** Bitcoin Core's chain, e.g. "regtest"; null if Core is unreachable */
+  network: string | null;
+  core_height: number | null;
   indexed_height: number | null;
+  /** core_height − indexed_height, never negative; null if Core is unreachable */
+  blocks_behind: number | null;
+  /** indexed tip hash equals Core's best block hash; null if Core is unreachable */
+  synced: boolean | null;
+  bitcoin_core: ServiceState;
+  database: ServiceState;
+  zmq: { blocks: ZmqEndpointStatus; transactions: ZmqEndpointStatus };
+  mempool_transactions: number;
   blocks: number;
   transactions: number;
   inputs: number;

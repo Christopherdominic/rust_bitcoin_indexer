@@ -32,6 +32,13 @@ impl BitcoinRpc {
         Ok(self.client.get_block_hex(hash)?)
     }
 
+    /// Network and best block. Deserialized into a minimal struct for the
+    /// same reason as the mempool: `bitcoincore_rpc`'s version does not
+    /// parse newer Core responses.
+    pub fn get_blockchain_info(&self) -> Result<BlockchainInfo> {
+        Ok(self.client.call("getblockchaininfo", &[])?)
+    }
+
     /// Bitcoin Core's current mempool, keyed by txid.
     ///
     /// Deserialized into our own minimal struct rather than
@@ -50,6 +57,16 @@ impl BitcoinRpc {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// The parts of `getblockchaininfo` the status endpoint reports.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BlockchainInfo {
+    /// "main", "test", "testnet4", "signet" or "regtest".
+    pub chain: String,
+    pub blocks: u64,
+    #[serde(rename = "bestblockhash")]
+    pub best_block_hash: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,5 +121,29 @@ mod tests {
             .parse::<Txid>()
             .unwrap()];
         assert_eq!(minimal.fees.base, Amount::from_sat(110));
+    }
+
+    #[test]
+    fn blockchain_info_parses_recent_core_responses() {
+        // Bitcoin Core 28+ returns `warnings` as an array, which the
+        // `bitcoincore_rpc` struct rejects; ours ignores unused fields.
+        let json = r#"{
+            "chain": "regtest", "blocks": 350, "headers": 350,
+            "bestblockhash": "4444444444444444444444444444444444444444444444444444444444444444",
+            "bits": "207fffff", "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+            "difficulty": 4.656542373906925e-10, "time": 1790900000, "mediantime": 1790899000,
+            "verificationprogress": 1, "initialblockdownload": false,
+            "chainwork": "00000000000000000000000000000000000000000000000000000000000002be",
+            "size_on_disk": 123456, "pruned": false, "warnings": []
+        }"#;
+
+        let info: BlockchainInfo = serde_json::from_str(json).unwrap();
+
+        assert_eq!(info.chain, "regtest");
+        assert_eq!(info.blocks, 350);
+        assert_eq!(
+            info.best_block_hash,
+            "4444444444444444444444444444444444444444444444444444444444444444"
+        );
     }
 }

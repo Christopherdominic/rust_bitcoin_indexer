@@ -4,6 +4,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use bitcoin::{Address, Network, OutPoint, ScriptBuf};
 
+use crate::rpc::bitcoin::BlockchainInfo;
+
 use super::*;
 use crate::{
     indexer::sync::sync_chain,
@@ -315,6 +317,136 @@ async fn self_transfer_with_external_fee_input_is_self() {
         ),
         ("self", 10_000, 10_000, 0)
     );
+
+    db.cleanup().await;
+}
+
+// ------------------------------------------------------------
+// STATUS
+// ------------------------------------------------------------
+
+/// Bitcoin Core as the status endpoint sees it: a tip, or unreachable.
+struct MockNode(Option<BlockchainInfo>);
+
+impl crate::api::state::NodeInfo for MockNode {
+    fn blockchain_info(&self) -> anyhow::Result<BlockchainInfo> {
+        self.0
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("connection refused"))
+    }
+}
+
+fn core_at(height: u64, hash: &bitcoin::BlockHash) -> MockNode {
+    MockNode(Some(BlockchainInfo {
+        chain: "regtest".to_string(),
+        blocks: height,
+        best_block_hash: hash.to_string(),
+    }))
+}
+
+async fn status_with(db: &TestDb, node: MockNode) -> StatusResponse {
+    let state = AppState::new(db.pool.clone()).with_node(std::sync::Arc::new(node));
+    status(State(state)).await.unwrap().0
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn status_compares_indexed_tip_with_core() {
+    let db = TestDb::new().await;
+
+    let shared = build_chain(&[], 2, 'a'); // 0..=1
+    let indexed = build_chain(&shared, 1, 'a'); // 2A
+    sync_chain(&MockChain::new(indexed.clone()), &db.pool)
+        .await
+        .unwrap();
+
+    // Core's best block is our tip.
+    let s = status_with(&db, core_at(2, &indexed[2].block_hash())).await;
+    assert_eq!(s.bitcoin_core, ServiceState::Connected);
+    assert_eq!(s.network.as_deref(), Some("regtest"));
+    assert_eq!(
+        (s.core_height, s.indexed_height, s.blocks_behind, s.synced),
+        (Some(2), Some(2), Some(0), Some(true))
+    );
+
+    // Core is three blocks ahead.
+    let ahead = build_chain(&indexed, 3, 'a');
+    let s = status_with(&db, core_at(5, &ahead[5].block_hash())).await;
+    assert_eq!((s.blocks_behind, s.synced), (Some(3), Some(false)));
+
+    // Same height, different block: a reorg the indexer has not handled yet.
+    let fork = build_chain(&shared, 1, 'b'); // 2B
+    let s = status_with(&db, core_at(2, &fork[2].block_hash())).await;
+    assert_eq!((s.blocks_behind, s.synced), (Some(0), Some(false)));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn status_reports_unknown_rather_than_guessing_when_core_is_down() {
+    let db = TestDb::new().await;
+    sync_chain(&MockChain::new(build_chain(&[], 3, 'a')), &db.pool)
+        .await
+        .unwrap();
+
+    let s = status_with(&db, MockNode(None)).await;
+
+    assert_eq!(s.bitcoin_core, ServiceState::Unreachable);
+    assert_eq!(s.database, ServiceState::Connected);
+    assert_eq!(
+        (s.network, s.core_height, s.blocks_behind, s.synced),
+        (None, None, None, None)
+    );
+    // What the database knows is still reported.
+    assert_eq!((s.indexed_height, s.blocks), (Some(2), 3));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn status_json_exposes_recorded_zmq_state() {
+    use crate::zmq::status::{EndpointState, ZmqStatus};
+    use bitcoincore_rpc::jsonrpc::serde_json::{self, json};
+
+    let db = TestDb::new().await;
+    let blocks = build_chain(&[], 1, 'a');
+    sync_chain(&MockChain::new(blocks.clone()), &db.pool)
+        .await
+        .unwrap();
+
+    let zmq = std::sync::Arc::new(ZmqStatus::new(false));
+    zmq.blocks.set(EndpointState::Connected);
+    zmq.blocks.message_received();
+
+    let state = AppState::new(db.pool.clone())
+        .with_node(std::sync::Arc::new(core_at(0, &blocks[0].block_hash())))
+        .with_zmq(zmq);
+    let body = serde_json::to_value(status(State(state)).await.unwrap().0).unwrap();
+
+    assert_eq!(body["bitcoin_core"], json!("connected"));
+    assert_eq!(body["database"], json!("connected"));
+    assert_eq!(body["synced"], json!(true));
+    assert_eq!(body["zmq"]["blocks"]["status"], json!("connected"));
+    assert!(body["zmq"]["blocks"]["last_message_at"].is_i64());
+    assert_eq!(
+        body["zmq"]["transactions"]["status"],
+        json!("not_configured")
+    );
+    assert_eq!(body["zmq"]["transactions"]["last_message_at"], json!(null));
+    assert_eq!(body["mempool_transactions"], json!(0));
+    // Fields the frontend already reads are still there.
+    for field in [
+        "indexed_height",
+        "blocks",
+        "transactions",
+        "inputs",
+        "outputs",
+        "unspent_outputs",
+    ] {
+        assert!(body.get(field).is_some(), "{field} missing");
+    }
 
     db.cleanup().await;
 }
