@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bitcoin::{Block, BlockHash};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgExecutor, PgPool, Postgres, Transaction};
 
 pub async fn save_block(
     db: &mut Transaction<'_, Postgres>,
@@ -46,4 +46,40 @@ pub async fn get_last_indexed_height(pool: &PgPool) -> Result<Option<i64>> {
         .await?;
 
     Ok(height)
+}
+
+/// Hash of the indexed block at `height`, if any.
+pub async fn get_block_hash_at<'e>(db: impl PgExecutor<'e>, height: u64) -> Result<Option<String>> {
+    let hash: Option<String> = sqlx::query_scalar("SELECT hash FROM blocks WHERE height = $1")
+        .bind(height as i64)
+        .fetch_optional(db)
+        .await?;
+
+    Ok(hash)
+}
+
+/// Indexed `(height, hash)` pairs at or below `max_height`, highest first.
+pub async fn get_block_hashes_desc(
+    pool: &PgPool,
+    max_height: u64,
+    limit: i64,
+) -> Result<Vec<(u64, String)>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT height, hash
+        FROM blocks
+        WHERE height <= $1
+        ORDER BY height DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(max_height as i64)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(height, hash)| (height as u64, hash))
+        .collect())
 }

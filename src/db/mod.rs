@@ -2,5 +2,6 @@ pub mod blocks;
 pub mod inputs;
 pub mod outputs;
 pub mod postgres;
+pub mod reorg;
 pub mod transactions;
 pub mod utxo;

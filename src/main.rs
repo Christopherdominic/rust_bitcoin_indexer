@@ -3,6 +3,8 @@ mod config;
 mod db;
 mod indexer;
 mod rpc;
+#[cfg(test)]
+mod test_support;
 mod ui;
 mod zmq;
 

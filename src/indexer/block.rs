@@ -1,19 +1,20 @@
 use anyhow::Result;
-use bitcoin::Block;
 use bitcoin::consensus::deserialize;
+use bitcoin::{Block, BlockHash};
 
 use crate::{rpc::bitcoin::BitcoinRpc, ui};
 
 pub struct BlockProcessor;
 
 impl BlockProcessor {
-    pub fn fetch(rpc: &BitcoinRpc, height: u64) -> Result<Block> {
-        let hash = rpc.get_block_hash(height)?;
-
-        let block_hex = rpc.get_block_hex(&hash)?;
+    /// Fetches a block by hash rather than height, so the block we store
+    /// is exactly the one whose hash we looked up — even if the node
+    /// reorganizes between the two RPC calls.
+    pub fn fetch(rpc: &BitcoinRpc, hash: &BlockHash) -> Result<Block> {
+        let block_hex = rpc.get_block_hex(hash)?;
         let raw_block = hex::decode(&block_hex)?;
 
-        ui::block_fetched(&hash, raw_block.len());
+        ui::block_fetched(hash, raw_block.len());
 
         let block: Block = deserialize(&raw_block)?;
 
