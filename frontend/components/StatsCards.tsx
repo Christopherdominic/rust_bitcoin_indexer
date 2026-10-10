@@ -1,10 +1,8 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
 import Link from "next/link";
-import { API_URL } from "@/lib/api";
 import { formatNumber, formatRelative, percent } from "@/lib/format";
-import type { BlockSummary, IndexerStatus } from "@/lib/types";
+import type { BlockSummary, IndexerStatus, ZmqEndpointState } from "@/lib/types";
 import { HashDisplay } from "./HashDisplay";
 import { Skeleton } from "./LoadingState";
 import type { Connection } from "./StatusProvider";
@@ -24,7 +22,7 @@ export function StatsCards({ status, connection, updatedAt, tip }: StatsCardsPro
   const ready = status !== null;
 
   return (
-    <section className="overflow-hidden rounded-md border border-line bg-surface" aria-label="Indexer statistics">
+    <section className="card" aria-label="Indexer statistics">
       <div className="grid lg:grid-cols-[minmax(0,20rem)_1fr]">
         {/* Primary metric */}
         <div className="border-b border-line p-5 lg:border-b-0 lg:border-r">
@@ -87,7 +85,7 @@ export function StatsCards({ status, connection, updatedAt, tip }: StatsCardsPro
         </div>
       </div>
 
-      <Pipeline connection={connection} updatedAt={updatedAt} />
+      <Pipeline status={status} connection={connection} updatedAt={updatedAt} />
     </section>
   );
 }
@@ -111,32 +109,86 @@ function Metric({ label, value, href }: { label: string; value: number | undefin
   );
 }
 
-/** Data path from node to this UI. Only the API hop has an observable state. */
-function Pipeline({ connection, updatedAt }: { connection: Connection; updatedAt: number | null }) {
-  const apiHost = API_URL?.replace(/^https?:\/\//, "") ?? "unconfigured";
-  const apiTone = connection === "live" ? "text-ok" : connection === "offline" ? "text-bad" : "text-muted";
-  const steps: { name: string; detail: string; tone?: string }[] = [
-    { name: "bitcoind", detail: "regtest" },
-    { name: "rpc + zmq", detail: "" },
-    { name: "amiable-indexer", detail: "rust" },
-    { name: "postgres", detail: "" },
-    { name: "axum api", detail: apiHost, tone: apiTone },
-  ];
+type Health = "ok" | "warn" | "bad" | "idle";
+
+const healthDot: Record<Health, string> = {
+  ok: "bg-ok",
+  warn: "bg-btc",
+  bad: "bg-bad",
+  idle: "bg-faint",
+};
+
+const zmqLabel: Record<ZmqEndpointState, [string, Health]> = {
+  connected: ["connected", "ok"],
+  connecting: ["connecting", "idle"],
+  disconnected: ["disconnected", "bad"],
+  not_started: ["not started", "idle"],
+  not_configured: ["not configured", "idle"],
+};
+
+/**
+ * Live state of each hop from Bitcoin Core to this UI, exactly as /api/status
+ * reports it. Nothing here is inferred from the page having loaded.
+ */
+function Pipeline({
+  status,
+  connection,
+  updatedAt,
+}: {
+  status: IndexerStatus | null;
+  connection: Connection;
+  updatedAt: number | null;
+}) {
+  const items: { name: string; value: string; health: Health; title?: string }[] = [];
+
+  if (connection === "offline") {
+    items.push({ name: "indexer api", value: "unreachable", health: "bad" });
+  } else if (status) {
+    const core = status.bitcoin_core === "connected";
+    items.push({ name: "bitcoin core", value: core ? "connected" : "unreachable", health: core ? "ok" : "bad" });
+
+    const [blocks, blocksHealth] = zmqLabel[status.zmq.blocks.status];
+    items.push({ name: "zmq blocks", value: blocks, health: blocksHealth });
+    const [txs, txsHealth] = zmqLabel[status.zmq.transactions.status];
+    items.push({ name: "zmq txs", value: txs, health: txsHealth });
+
+    if (status.synced === null) {
+      items.push({ name: "sync", value: "unknown", health: "idle", title: "Bitcoin Core is unreachable" });
+    } else if (status.synced) {
+      items.push({ name: "sync", value: "synchronized", health: "ok" });
+    } else {
+      const behind = status.blocks_behind ?? 0;
+      items.push({
+        name: "sync",
+        value: behind > 0 ? `${formatNumber(behind)} behind` : "reorg pending",
+        health: "warn",
+        title: behind > 0 ? undefined : "Same height as Bitcoin Core, different tip hash",
+      });
+    }
+
+    items.push({
+      name: "mempool",
+      value: `${formatNumber(status.mempool_transactions)} tx`,
+      health: "idle",
+    });
+  }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line bg-bg/40 px-5 py-2.5 font-mono text-[11px]">
-      <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted">
-        {steps.map((s, i) => (
-          <li key={s.name} className="flex items-center gap-1.5">
-            {i > 0 && <ChevronRight className="size-3 text-faint" aria-hidden />}
-            <span className={s.tone ?? "text-muted"}>{s.name}</span>
-            {s.detail && <span className="text-faint">{s.detail}</span>}
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line bg-raised/40 px-5 py-2.5 font-mono text-[11px]">
+      <ul className="flex flex-wrap items-center gap-x-5 gap-y-1.5" aria-label="System status">
+        {items.map((item) => (
+          <li key={item.name} className="flex items-center gap-1.5" title={item.title}>
+            <span className={`size-1.5 rounded-full ${healthDot[item.health]}`} aria-hidden />
+            <span className="text-faint">{item.name}</span>
+            <span className={item.health === "bad" ? "text-bad" : item.health === "warn" ? "text-btc" : "text-muted"}>
+              {item.value}
+            </span>
           </li>
         ))}
-      </ol>
+      </ul>
       <span className="text-faint">
         {updatedAt
-          ? `status polled ${new Date(updatedAt).toLocaleTimeString("en-GB", { hour12: false })}`
+          ? `polled ${new Date(updatedAt).toLocaleTimeString("en-GB", { hour12: false })}`
           : connection === "offline"
             ? "api unreachable"
             : "polling status…"}

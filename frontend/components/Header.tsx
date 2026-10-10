@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NetworkStatus } from "./NetworkStatus";
 import { SearchBar } from "./SearchBar";
+import { ThemeToggle } from "./ThemeToggle";
 
 const NAV = [
   { href: "/", label: "Dashboard", match: (p: string) => p === "/" },
@@ -37,13 +38,14 @@ export function Header() {
           ))}
         </nav>
 
-        <div className="ml-auto flex items-center gap-5">
+        <div className="ml-auto flex items-center gap-4">
           {!onDashboard && (
             <div className="relative hidden w-64 lg:block">
               <SearchBar size="sm" />
             </div>
           )}
           <NetworkStatus />
+          <ThemeToggle />
         </div>
       </div>
 

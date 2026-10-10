@@ -9,17 +9,21 @@ const STATES = {
   offline: { label: "OFFLINE", dot: "bg-bad", text: "text-bad" },
 } as const;
 
-/** REGTEST badge + connection state derived from real /api/status polling. */
+/** Network badge + API connection state, both from real /api/status polling. */
 export function NetworkStatus() {
   const { connection, status } = useIndexerStatus();
   const s = STATES[connection];
   const tip = status?.indexed_height;
+  // Only what Bitcoin Core reports; hidden while it is unknown or unreachable.
+  const network = status?.network;
 
   return (
     <div className="flex items-center gap-3 font-mono text-[11px] tracking-wider">
-      <span className="rounded-sm border border-btc/40 px-1.5 py-0.5 text-btc" title="Bitcoin network: regtest">
-        REGTEST
-      </span>
+      {network && (
+        <span className="rounded-sm border border-btc/40 px-1.5 py-0.5 text-btc" title={`Bitcoin network reported by Bitcoin Core: ${network}`}>
+          {network.toUpperCase()}
+        </span>
+      )}
       <span
         className={`flex items-center gap-1.5 ${s.text}`}
         title={connection === "live" ? "Indexer API responding" : connection === "offline" ? "Indexer API unreachable" : "Contacting indexer API"}

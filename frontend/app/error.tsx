@@ -6,7 +6,7 @@ export default function Error({ error, retry }: { error: Error & { digest?: stri
   return (
     <section
       role="alert"
-      className="flex flex-col items-center gap-2 rounded-md border border-line bg-surface px-4 py-16 text-center"
+      className="flex flex-col items-center gap-2 card px-4 py-16 text-center"
     >
       <AlertTriangle className="size-5 text-bad" strokeWidth={1.5} />
       <p className="text-sm font-medium text-fg">Something went wrong rendering this view</p>

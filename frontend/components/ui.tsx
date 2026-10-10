@@ -1,4 +1,5 @@
 import { formatBTC, formatSats } from "@/lib/format";
+import type { ScriptType } from "@/lib/types";
 
 /** Bordered section with a header bar. The primary structural surface. */
 export function Panel({
@@ -15,7 +16,7 @@ export function Panel({
   className?: string;
 }) {
   return (
-    <section className={`overflow-hidden rounded-md border border-line bg-surface ${className}`}>
+    <section className={`card ${className}`}>
       {(title || actions) && (
         <header className="flex min-h-11 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-2">
           <div className="flex min-w-0 items-baseline gap-3">
@@ -100,8 +101,34 @@ export function Tag({ tone = "neutral", children }: { tone?: Tone; children: Rea
   );
 }
 
-export function SpendTag({ spent }: { spent: boolean }) {
+export function SpendTag({ spent, unspendable = false }: { spent: boolean; unspendable?: boolean }) {
+  if (unspendable) {
+    return (
+      <span title="Provably unspendable (OP_RETURN): never part of the UTXO set">
+        <Tag>Unspendable</Tag>
+      </span>
+    );
+  }
   return spent ? <Tag tone="bad">Spent</Tag> : <Tag tone="ok">Unspent</Tag>;
+}
+
+const scriptTypeLabel: Record<ScriptType, string> = {
+  p2pkh: "P2PKH",
+  p2sh: "P2SH",
+  p2wpkh: "P2WPKH",
+  p2wsh: "P2WSH",
+  p2tr: "P2TR",
+  op_return: "OP_RETURN",
+  unknown: "Other",
+};
+
+/** Output template. "Other" is any non-standard template; it says nothing about spendability. */
+export function ScriptTypeTag({ type }: { type: ScriptType }) {
+  return (
+    <span title={type === "unknown" ? "Not a recognised standard template" : undefined}>
+      <Tag>{scriptTypeLabel[type]}</Tag>
+    </span>
+  );
 }
 
 /** Monospace script (ASM) block that wraps instead of overflowing. */

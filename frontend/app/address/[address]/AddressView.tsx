@@ -65,7 +65,7 @@ export function AddressView({ address }: { address: string }) {
 function Balance({ summary }: { summary: AddressSummary | undefined }) {
   const s = summary;
   return (
-    <section className="overflow-hidden rounded-md border border-line bg-surface" aria-label="Address totals">
+    <section className="card" aria-label="Address totals">
       <div className="grid md:grid-cols-[minmax(0,1.3fr)_minmax(0,2fr)]">
         <div className="border-b border-line p-5 md:border-b-0 md:border-r">
           <p className="label">Balance</p>
@@ -75,6 +75,15 @@ function Balance({ summary }: { summary: AddressSummary | undefined }) {
                 {formatBTC(s.balance, false)} <span className="text-base text-muted">BTC</span>
               </p>
               <p className="num mt-1 text-sm text-muted">{formatSats(s.balance)}</p>
+              {s.immature_balance > 0 && (
+                <p
+                  className="mt-2 text-xs text-faint"
+                  title="Coinbase outputs can be spent once they have 100 confirmations"
+                >
+                  <span className="num text-muted">{formatBTC(s.spendable_balance, false)}</span> spendable ·{" "}
+                  <span className="num text-btc">{formatBTC(s.immature_balance, false)}</span> immature coinbase
+                </p>
+              )}
             </>
           ) : (
             <div className="mt-2 space-y-2">

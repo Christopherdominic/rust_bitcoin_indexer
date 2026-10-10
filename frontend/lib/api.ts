@@ -7,6 +7,7 @@ import type {
   SearchResult,
   TransactionDetail,
   Utxo,
+  UtxoSummary,
   WatchActivity,
   WatchedAddress,
 } from "./types";
@@ -97,6 +98,8 @@ export const getTransaction = (txid: string) =>
   api<TransactionDetail>(`/api/transactions/${seg(txid)}`, isObject);
 
 export const getUtxos = () => api<Utxo[]>("/api/utxos", isArray);
+
+export const getUtxoSummary = () => api<UtxoSummary>("/api/utxos/summary", isObject);
 
 // ---------------------------------------------------------------- addresses
 

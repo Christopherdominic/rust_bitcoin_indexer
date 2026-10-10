@@ -8,6 +8,7 @@ import { HashDisplay } from "@/components/HashDisplay";
 import { DetailSkeleton, Skeleton } from "@/components/LoadingState";
 import { DetailList, DetailRow, PageHeader, Panel, Sats, Script, SpendTag, Tag } from "@/components/ui";
 import { getTransaction } from "@/lib/api";
+import { isProvablyUnspendable } from "@/lib/bitcoin";
 import { formatNumber, formatSequence, formatTimestamp, truncateHash } from "@/lib/format";
 import type { TransactionInput, TransactionOutput } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
@@ -33,7 +34,9 @@ export function TransactionView({ txid }: { txid: string }) {
 
   const tx = data?.transaction;
   const totalOut = data?.outputs.reduce((sum, o) => sum + o.value, 0) ?? 0;
-  const unspentCount = data?.outputs.filter((o) => !o.spent).length ?? 0;
+  const unspendableCount = data?.outputs.filter((o) => isProvablyUnspendable(o.script_pubkey)).length ?? 0;
+  const unspentCount =
+    data?.outputs.filter((o) => !o.spent && !isProvablyUnspendable(o.script_pubkey)).length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -91,6 +94,9 @@ export function TransactionView({ txid }: { txid: string }) {
                 <span className="num">
                   {unspentCount} <span className="text-faint">of {data.outputs.length}</span>
                 </span>
+                {unspendableCount > 0 && (
+                  <span className="ml-2 text-xs text-faint">{unspendableCount} provably unspendable</span>
+                )}
               </DetailRow>
             </DetailList>
           </div>
@@ -177,7 +183,7 @@ function OutputRow({ output }: { output: TransactionOutput }) {
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex items-start justify-between gap-3">
           <Sats value={output.value} btc className="text-[13px]" />
-          <SpendTag spent={output.spent} />
+          <SpendTag spent={output.spent} unspendable={isProvablyUnspendable(output.script_pubkey)} />
         </div>
         <Field label="scriptPubKey">
           <Script value={output.script_pubkey} />
