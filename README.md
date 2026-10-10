@@ -144,9 +144,10 @@ Never commit `.env`. The API never returns RPC credentials, `DATABASE_URL` or ZM
 Migrations are plain SQL files in [`src/migrations/`](src/migrations/). They are **not** applied automatically and are not tracked in a migrations table. Apply them in file-name order. Every file is written to be safe to re-run, so applying the whole directory again after pulling new ones is fine:
 
 ```sh
-set -a; source .env; set +a
+# Read DATABASE_URL from .env without shell-sourcing it (URLs often contain '&').
+DATABASE_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | sed -E "s/^['\"]//; s/['\"]$//")
 for m in src/migrations/*.sql; do
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$m"
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction -f "$m"
 done
 ```
 
@@ -154,7 +155,7 @@ Without a local `psql`, use the Postgres image:
 
 ```sh
 for m in src/migrations/*.sql; do
-  docker run --rm -i postgres:16-alpine psql "$DATABASE_URL" -v ON_ERROR_STOP=1 < "$m"
+  docker run --rm -i postgres:16-alpine psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction < "$m"
 done
 ```
 
