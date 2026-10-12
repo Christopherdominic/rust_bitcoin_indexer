@@ -116,7 +116,7 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to read indexer status: {}", error);
+        crate::ui::error(format!("Failed to read indexer status: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -230,7 +230,7 @@ pub async fn get_blocks(
     .fetch_all(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to fetch blocks: {}", error);
+        crate::ui::error(format!("Failed to fetch blocks: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -262,7 +262,7 @@ pub async fn get_block(
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to fetch block {}: {}", height, error);
+        crate::ui::error(format!("Failed to fetch block {}: {}", height, error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -299,7 +299,7 @@ pub async fn get_block_by_hash(
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to fetch block by hash {}: {}", hash, error);
+        crate::ui::error(format!("Failed to fetch block by hash {}: {}", hash, error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -335,10 +335,10 @@ async fn build_block_response(
     .fetch_all(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!(
+        crate::ui::error(format!(
             "Failed to fetch transactions for block {}: {}",
             block.height, error
-        );
+        ));
 
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -633,7 +633,7 @@ pub async fn get_utxo_summary(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to summarise UTXOs: {}", error);
+        crate::ui::error(format!("Failed to summarise UTXOs: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -653,7 +653,7 @@ pub async fn get_utxo_summary(
     .fetch_all(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to group UTXOs by script type: {}", error);
+        crate::ui::error(format!("Failed to group UTXOs by script type: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -832,7 +832,7 @@ pub async fn get_address(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to check address {}: {}", address, error);
+        crate::ui::error(format!("Failed to check address {}: {}", address, error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -851,7 +851,7 @@ pub async fn get_address(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to calculate received amount: {}", error);
+        crate::ui::error(format!("Failed to calculate received amount: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -878,7 +878,7 @@ pub async fn get_address(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to calculate address balance: {}", error);
+        crate::ui::error(format!("Failed to calculate address balance: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -887,7 +887,7 @@ pub async fn get_address(
     let transaction_count = address_history(&state, &address)
         .await
         .map_err(|error| {
-            eprintln!("Failed to count address transactions: {}", error);
+            crate::ui::error(format!("Failed to count address transactions: {}", error));
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .len() as i64;
@@ -923,7 +923,7 @@ pub async fn get_address_utxos(
     .fetch_all(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to fetch UTXOs for {}: {}", address, error);
+        crate::ui::error(format!("Failed to fetch UTXOs for {}: {}", address, error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -940,10 +940,10 @@ pub async fn get_address_transactions(
     Path(address): Path<String>,
 ) -> Result<Json<Vec<AddressTransactionResponse>>, StatusCode> {
     let transactions = address_history(&state, &address).await.map_err(|error| {
-        eprintln!(
+        crate::ui::error(format!(
             "Failed to fetch transactions for address {}: {}",
             address, error
-        );
+        ));
 
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -994,7 +994,7 @@ pub async fn search(
         .fetch_one(&state.pool)
         .await
         .map_err(|error| {
-            eprintln!("Block-height search failed: {}", error);
+            crate::ui::error(format!("Block-height search failed: {}", error));
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -1021,7 +1021,7 @@ pub async fn search(
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Block-hash search failed: {}", error);
+        crate::ui::error(format!("Block-hash search failed: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1047,7 +1047,7 @@ pub async fn search(
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Transaction search failed: {}", error);
+        crate::ui::error(format!("Transaction search failed: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1074,7 +1074,7 @@ pub async fn search(
     .fetch_optional(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Address search failed: {}", error);
+        crate::ui::error(format!("Address search failed: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1126,7 +1126,7 @@ pub async fn watch_address(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to validate address: {}", error);
+        crate::ui::error(format!("Failed to validate address: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1145,7 +1145,7 @@ pub async fn watch_address(
     .execute(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to watch address: {}", error);
+        crate::ui::error(format!("Failed to watch address: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1165,7 +1165,7 @@ pub async fn get_watched_addresses(
     .fetch_all(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to fetch watched addresses: {}", error);
+        crate::ui::error(format!("Failed to fetch watched addresses: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1188,7 +1188,7 @@ pub async fn get_watch_activity(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to check watched address: {}", error);
+        crate::ui::error(format!("Failed to check watched address: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1207,7 +1207,10 @@ pub async fn get_watch_activity(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to calculate watched received value: {}", error);
+        crate::ui::error(format!(
+            "Failed to calculate watched received value: {}",
+            error
+        ));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1223,12 +1226,15 @@ pub async fn get_watch_activity(
     .fetch_one(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to calculate watched balance: {}", error);
+        crate::ui::error(format!("Failed to calculate watched balance: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     let history = address_history(&state, &address).await.map_err(|error| {
-        eprintln!("Failed to fetch watched address activity: {}", error);
+        crate::ui::error(format!(
+            "Failed to fetch watched address activity: {}",
+            error
+        ));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
@@ -1263,7 +1269,7 @@ pub async fn unwatch_address(
     .execute(&state.pool)
     .await
     .map_err(|error| {
-        eprintln!("Failed to remove watched address: {}", error);
+        crate::ui::error(format!("Failed to remove watched address: {}", error));
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 

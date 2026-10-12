@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::api::state::AppState;
 
 fn internal_error(context: &str, error: sqlx::Error) -> StatusCode {
-    eprintln!("{context}: {error}");
+    crate::ui::error(format!("{context}: {error}"));
     StatusCode::INTERNAL_SERVER_ERROR
 }
 

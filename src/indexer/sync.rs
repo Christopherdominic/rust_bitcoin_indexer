@@ -135,7 +135,7 @@ async fn sync_once<C: ChainSource + ?Sized>(chain: &C, pool: &PgPool) -> Result<
         }
     }
 
-    println!();
+    ui::blank();
     ui::success("Synchronization complete");
 
     Ok(SyncOutcome::Done)

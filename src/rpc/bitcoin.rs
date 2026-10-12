@@ -32,6 +32,18 @@ impl BitcoinRpc {
         Ok(self.client.get_block_hex(hash)?)
     }
 
+    /// Any RPC by name, returning raw JSON. Used by the dashboard for wallet
+    /// and mining calls (`getnewaddress`, `sendtoaddress`, `generatetoaddress`,
+    /// `invalidateblock`, …) without depending on `bitcoincore_rpc`'s typed
+    /// structs, which lag behind newer Core versions.
+    pub fn call<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: &[serde_json::Value],
+    ) -> Result<T> {
+        Ok(self.client.call(method, params)?)
+    }
+
     /// Network and best block. Deserialized into a minimal struct for the
     /// same reason as the mempool: `bitcoincore_rpc`'s version does not
     /// parse newer Core responses.

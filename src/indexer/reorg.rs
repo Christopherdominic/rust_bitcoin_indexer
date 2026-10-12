@@ -56,12 +56,31 @@ pub async fn reconcile<C: ChainSource + ?Sized>(
 
     let rollback = rollback_to(pool, ancestor).await?;
 
-    ui::success(format!(
-        "Rolled back {} orphaned block(s), restored {} output(s) to unspent",
-        rollback.blocks_removed, rollback.outputs_restored
-    ));
+    ui::success(rollback_message(&rollback));
 
     Ok(Some(rollback))
+}
+
+const ROLLBACK_PREFIX: &str = "Rolled back ";
+
+/// The log line announcing a completed rollback. The dashboard reads the
+/// restored-output count back out of it with [`parse_rollback_message`].
+pub fn rollback_message(rollback: &Rollback) -> String {
+    format!(
+        "{ROLLBACK_PREFIX}{} orphaned block(s), restored {} output(s) to unspent",
+        rollback.blocks_removed, rollback.outputs_restored
+    )
+}
+
+/// The inverse of [`rollback_message`]; `None` for any other line.
+pub fn parse_rollback_message(line: &str) -> Option<Rollback> {
+    let rest = line.strip_prefix(ROLLBACK_PREFIX)?;
+    let (blocks, rest) = rest.split_once(" orphaned block(s), restored ")?;
+    let (outputs, _) = rest.split_once(" output(s)")?;
+    Some(Rollback {
+        blocks_removed: blocks.parse().ok()?,
+        outputs_restored: outputs.parse().ok()?,
+    })
 }
 
 /// Walks back from `indexed_tip` to the highest indexed block whose hash is
@@ -118,6 +137,19 @@ mod tests {
             .rev()
             .map(|height| (height, chain.block_hash(height).unwrap().to_string()))
             .collect()
+    }
+
+    #[test]
+    fn rollback_message_round_trips() {
+        let rollback = Rollback {
+            blocks_removed: 2,
+            outputs_restored: 5,
+        };
+        assert_eq!(
+            parse_rollback_message(&rollback_message(&rollback)),
+            Some(rollback)
+        );
+        assert_eq!(parse_rollback_message("Indexed block #3 · 1 tx"), None);
     }
 
     #[test]
